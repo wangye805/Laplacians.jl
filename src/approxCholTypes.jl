@@ -80,6 +80,36 @@ end
 
 #=============================================================
 
+LDL
+
+=============================================================#
+
+"""
+LDL can be represented as [LA, 0; LB, I], P(permutation vector/matrix)
+"""
+
+mutable struct LDL{Tind, Tval}
+	n::Tind #num of internal nodes
+	m::Tind #num of ports
+	perm_idx::Tind
+
+	col::Array{Tind, 1}
+
+	current_row_ptr_A::Tind
+	colptr_A::Array{Tind, 1};
+    rowval_A::Array{Tind,1}
+    nzval_A::Array{Tval,1}
+
+	current_row_ptr_B::Tind
+	colptr_B::Array{Tind, 1};
+    rowval_B::Array{Tind,1}
+    nzval_B::Array{Tval,1};
+
+	diagA::Array{Tval, 1};
+end
+
+#=============================================================
+
 ApproxCholPQ
 the data strcture we use to keep track of degrees
 
