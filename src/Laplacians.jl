@@ -94,6 +94,7 @@ module Laplacians
 
   include("IO.jl")
   export writeIJV, read_graph
+  export read_matrix_market, matrix_market_to_graph, write_matrix_market
 
   include("graphOps.jl")
 

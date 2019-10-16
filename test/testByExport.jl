@@ -178,6 +178,42 @@ a2 = read_graph("tmp.txt")
 
 rm("tmp.txt")
 
+#testing APIs related to matrix market format
+#testcase in page 2 of icm10post.pdf by Daniel Spielman
+Lio = [2.0 -1 0 0 -1; -1 3 -1 -1 0; 0 -1 2 -1 0; 0 -1 -1 4 -2; -1 0 0 -2 3];
+LioSparse = SparseArrays.sparse(Lio);
+write_matrix_market("tmp.txt", LioSparse);
+#tmp.txt should be
+#4 4 8
+#1 1 2
+#2 2 3
+#3 3 2
+#4 4 4
+#2 1 -1
+#3 2 -1
+#4 2 -1
+#4 3 -1
+
+#now read back from tmp.txt
+A = read_matrix_market("tmp.txt");
+#the golden of A should be [2 -1 0 0; -1 3 -1 -1; 0 -1 2 -1; 0 -1 -1 4];
+@test norm(A-Lio[1:4, 1:4],2)<=1e-10
+#test writing graph to (i, j, v) format
+(ai, aj, av, n) = matrix_market_to_graph("tmp.txt")
+#golden of (ai, aj, av) should be
+#1 2 1
+#1 5 1
+#2 3 1
+#2 4 1
+#3 4 1
+#4 5 2
+
+#create the adj matrix based on i,j,v
+#n = 5;
+Ar = sparse(ai, aj, av, n, n);
+Ar = Ar + Ar';
+@test norm(lap(Ar)-Lio, 2)<=1e-10
+rm("tmp.txt")
 
 # export unweight, unweight!
 
