@@ -1015,29 +1015,65 @@ end
 function forwardSolve!(ldl::LDL{Tind, Tval}, y::Vector)where {Tind, Tval}
 	b1 = y[1:ldl.n];
 	b2 = y[(ldl.n+1):(ldl.n+ldl.m)];
-
-	#create the diagonal matrix D and invD
-	D = Diagonal(ldl.diagA);
-	invD = Diagonal(1.0./ldl.diagA);
-
-	#create the normalized LA
-	LA = SparseMatrixCSC(ldl.n, ldl.n, ldl.colptr_A, ldl.rowval_A, ldl.nzval_A);
-	LA = -LA*invD;
-	LA[diagind(LA)].=1.0;
-	
-	#create the normalized LB
-	LB = SparseMatrixCSC(ldl.m, ldl.n, ldl.colptr_B, ldl.rowval_B, ldl.nzval_B);
-	LB = -LB*invD;
 	
 	#now we want to get b2-LB*LA^-1P^Tb1
 	#P^Tb_1
 	permute!(b1, ldl.col);
 	#LA^-1
-	b1 = LA\b1;
+	#b1 = LA\b1;
+	invNLA!(ldl, b1);
 	#b2-LB*y
-	b2 = b2 - LB*b1;
+	#b2 = b2 - LB*b1;
+	b2 = b2-nLB(ldl, b1);
 	#re-assign b2 portion
 	y[(ldl.n+1):(ldl.n+ldl.m)] = b2;
+end
+
+#normalized LA solve: nLA x = y
+function invNLA!(ldl::LDL{Tind, Tval}, y::Vector) where {Tind, Tval}
+	@inbounds for i in 1:ldl.n-1
+		@inbounds for j in ldl.colptr_A[i]:(ldl.colptr_A[i+1]-1)
+			y[ldl.rowval_A[j]] = y[ldl.rowval_A[j]] + ldl.nzval_A[j]/ldl.diagA[i]*y[i];
+		end
+	end
+end
+
+#normalized LA' solve nLA'^{-1}y		
+function invNLAT!(ldl::LDL{Tind, Tval}, y::Vector) where {Tind, Tval}
+	@inbounds for i in ldl.n-1:-1:1
+		@inbounds for j in ldl.colptr_A[i]:(ldl.colptr_A[i+1]-1)
+			y[i] = y[i] + ldl.nzval_A[j]/ldl.diagA[i]*y[ldl.rowval_A[j]];
+		end
+	end
+end
+
+#matrix vector multiplication nLB*x
+function nLB(ldl::LDL{Tind, Tval}, x::Vector) where {Tind, Tval}
+	y = zeros(Tval, ldl.m);
+	@inbounds for i in 1:1:ldl.n
+		@inbounds for j in ldl.colptr_B[i]:(ldl.colptr_B[i+1]-1)
+			y[ldl.rowval_B[j]] = y[ldl.rowval_B[j]] -ldl.nzval_B[j]/ldl.diagA[i]*x[i];
+		end
+	end
+	return y;
+end
+
+#matrix vector multiplication nLB'*x
+function nLBT(ldl::LDL{Tind, Tval}, x::Vector) where {Tind, Tval}
+	y = zeros(Tval, ldl.n);
+	@inbounds for i in 1:1:ldl.n
+		@inbounds for j in ldl.colptr_B[i]:(ldl.colptr_B[i+1]-1)
+			y[i] = y[i] - ldl.nzval_B[j]/ldl.diagA[i]*x[ldl.rowval_B[j]];
+		end
+	end
+	return y;
+end
+
+#the function to do y = invD*x
+function invD!(ldl::LDL{Tind, Tval}, x::Vector) where {Tind, Tval}
+	@inbounds for i in 1:1:ldl.n
+		x[i] = x[i]/ldl.diagA[i];
+	end
 end
 
 #backwardSolve API required by Intel Pardiso package
@@ -1045,29 +1081,21 @@ end
 function backwardSolve!(ldl::LDL{Tind, Tval}, y::Vector)where {Tind, Tval}
 	b1 = y[1:ldl.n];
 	b2 = y[(ldl.n+1):(ldl.n+ldl.m)];#this is x2 part
-
-	#create the diagonal matrix D and invD
-	D = Diagonal(ldl.diagA);
-	invD = Diagonal(1.0./ldl.diagA);
-
-	#create the normalized LA
-	LA = SparseMatrixCSC(ldl.n, ldl.n, ldl.colptr_A, ldl.rowval_A, ldl.nzval_A);
-	LA = -LA*invD;
-	LA[diagind(LA)].=1.0;
-	
-	#create the normalized LB
-	LB = SparseMatrixCSC(ldl.m, ldl.n, ldl.colptr_B, ldl.rowval_B, ldl.nzval_B);
-	LB = -LB*invD;
 	
 	#we want to get P*LA^{-T}(invD*LA^{-1}*P^T*b1 - LB^Tb2)
 	#P^T(b_1)
 	permute!(b1, ldl.col);
 	#invD*LA^-1
-	b1 = invD*(LA\b1);
+	#b1 = invD*(LA\b1);
+	invNLA!(ldl, b1);
+	invD!(ldl, b1);
 
 	#LB^T*b2
-	b2 = (LB')*b2;	
-	b1 = (LA')\(b1-b2);
+	#b2 = (LB')*b2;	
+	b2 = nLBT(ldl, b2);
+	#b1 = (LA')\(b1-b2);
+	b1 = b1 - b2;
+	invNLAT!(ldl, b1);
 	#P(x)
 	invpermute!(b1, ldl.col);
 	
