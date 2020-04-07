@@ -626,7 +626,7 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind) where {Tind,Tval}
     @inbounds while it <= n
 
         i = approxCholPQPop!(pq)
-		println("pop out node $(i)");
+		#println("pop out node $(i)");
 
 		#PrintApproxCholPQ(pq);
 
@@ -662,7 +662,7 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind) where {Tind,Tval}
             j = ll.row
             revj = ll.reverse
 
-			println("deal with node $(j) in col $(i)");
+			#println("deal with node $(j) in col $(i)");
 
             f = w/(wdeg)
 
@@ -675,11 +675,11 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind) where {Tind,Tval}
             koff = searchsortedfirst(cumspace,r,one(len),len,o)
 
             k = colspace[koff].row
-			println("k is $(k)");
+			#println("k is $(k)");
             approxCholPQInc!(pq, k)
 
             newEdgeVal = f*(one(Tval)-f)*wdeg
-			println("newEdgeVal is $(newEdgeVal)");
+			#println("newEdgeVal is $(newEdgeVal)");
 
             # fix row k in col j
             revj.row = k   # dense time hog: presumably becaus of cache
@@ -705,7 +705,7 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind) where {Tind,Tval}
         j = ll.row
         revj = ll.reverse
 
-		println("deal with last node $(j) in col $(i)");
+		#println("deal with last node $(j) in col $(i)");
 
 		addOffDiag!(ldl,j, vals[len]);
 
@@ -719,7 +719,7 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind) where {Tind,Tval}
     end
 
 	finishColumn!(ldl)	
-	println("is exact factorization? $(exactFactorization)")
+	#println("is exact factorization? $(exactFactorization)")
 	#also the remaining schur complement graph (as adjacency matrix)
     return ldl, schurComplement!(a, n)
 end
@@ -751,7 +751,7 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind, PRNG::Array{Tval}) where
     @inbounds while it <= n
 
         i = approxCholPQPop!(pq)
-		println("pop out node $(i)");
+		#println("pop out node $(i)");
 
 		#PrintApproxCholPQ(pq);
 
@@ -787,7 +787,7 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind, PRNG::Array{Tval}) where
             j = ll.row
             revj = ll.reverse
 
-			println("deal with node $(j) in col $(i)");
+			#println("deal with node $(j) in col $(i)");
 
             f = w/(wdeg)
 
@@ -802,11 +802,11 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind, PRNG::Array{Tval}) where
             koff = searchsortedfirst(cumspace,r,one(len),len,o)
 
             k = colspace[koff].row
-			println("k is $(k)");
+			#println("k is $(k)");
             approxCholPQInc!(pq, k)
 
             newEdgeVal = f*(one(Tval)-f)*wdeg
-			println("newEdgeVal is $(newEdgeVal)");
+			#println("newEdgeVal is $(newEdgeVal)");
 
             # fix row k in col j
             revj.row = k   # dense time hog: presumably becaus of cache
@@ -832,7 +832,7 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind, PRNG::Array{Tval}) where
         j = ll.row
         revj = ll.reverse
 
-		println("deal with last node $(j) in col $(i)");
+		#println("deal with last node $(j) in col $(i)");
 
 		addOffDiag!(ldl,j, vals[len]);
 
@@ -846,7 +846,7 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind, PRNG::Array{Tval}) where
     end
 
 	finishColumn!(ldl)	
-	println("is exact factorization? $(exactFactorization)")
+	#println("is exact factorization? $(exactFactorization)")
 	#also the remaining schur complement graph (as adjacency matrix)
     return ldl, schurComplement!(a, n)
 end
