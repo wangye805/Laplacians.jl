@@ -724,6 +724,112 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind) where {Tind,Tval}
     return ldl, schurComplement!(a, n)
 end
 
+#the function to dump LDL
+#for debugging only
+#index has already been unified with c/c++ format to start from 0
+#can choose not to dump value by verbose option
+function dumpLDL(fh::IO, ldl::LDL{Tind, Tval}, verbose = true) where {Tind,Tval}
+    #print n
+    write(fh, "n: $(ldl.n)\n")
+    #print m
+    write(fh, "m: $(ldl.m)\n")
+    #print perm_idx
+    write(fh, "perm_idx: $(ldl.perm_idx - 1)\n")
+    #print col array
+    write(fh, "col: \n")
+    for idx in ldl.col
+        write(fh, "$(idx-1)\n")
+    end
+    #print current_row_ptr_A
+    write(fh, "current_row_ptr_A: $(ldl.current_row_ptr_A - 1)\n");
+    #print colptr_A
+    write(fh, "colptr_A: \n")
+    for idx in ldl.colptr_A
+        write(fh, "$(idx-1)\n")
+    end
+    #print rowval_A
+    write(fh, "rowval_A: \n")
+    for idx in ldl.rowval_A
+        write(fh, "$(idx - 1)\n")
+    end
+    if(verbose)
+        #print nzval_A
+        write(fh, "nzval_A: \n")
+        for val in ldl.nzval_A
+            write(fh, "$(val)\n")
+        end
+    end
+
+    #print current_row_ptr_B
+    write(fh, "current_row_ptr_B: $(ldl.current_row_ptr_B - 1)\n");
+    #print colptr_B
+    write(fh, "colptr_B: \n")
+    for idx in ldl.colptr_B
+        write(fh, "$(idx-1)\n")
+    end
+    #print rowval_B
+    write(fh, "rowval_B: \n")
+    for idx in ldl.rowval_B
+        write(fh, "$(idx - 1)\n")
+    end
+    if(verbose)
+        #print nzval_B
+        write(fh, "nzval_B: \n")
+        for val in ldl.nzval_B
+            write(fh, "$(val)\n")
+        end
+    end
+    #print diagA if necessary
+    if(verbose)
+        write(fh, "diag: \n")
+        for val in ldl.diagA
+            write(fh, "$(val)\n")
+        end
+    end
+end
+
+
+#the function to dump SchurComplement
+#for debugging only
+#index has already been unified with c/c++ format to start from 0
+#can choose not to dump value by verbose option
+function dumpSchurC(fh::IO, schurC::SparseMatrixCSC{Tval, Tind}, verbose = true) where {Tind,Tval}
+    #print m
+    write(fh, "m: $(schurC.m)\n");
+    #print n
+    write(fh, "n: $(schurC.n)\n");
+    #print colptr
+    write(fh, "colptr: \n")
+    for idx in schurC.colptr
+        write(fh, "$(idx-1)\n")
+    end
+    #print rowval
+    write(fh, "rowval: \n")
+    for idx in schurC.rowval
+        write(fh, "$(idx-1)\n")
+    end
+    if(verbose)
+        #print nzval
+        write(fh, "nzval: \n")
+        for val in schurC.nzval
+            write(fh, "$(val)\n")
+        end
+    end
+end
+
+#the function to dump approximate factorization results
+#for debugging only
+#index has already been unified with C/C++ to start from 0
+#can choose to dump connection only or also with value by verbose
+function dumpApproxFact(filename::AbstractString, ldl::LDL{Tind, Tval}, schurC::SparseMatrixCSC{Tval, Tind}, verbose = true) where {Tind,Tval}
+    fh = open(filename,"w")
+    #print LDL first
+    dumpLDL(fh, ldl, verbose);
+    #then print schurC
+    dumpSchurC(fh, schurC, verbose);
+    close(fh)
+end
+
 # fix the pseudo-randomness, and allow partial factorization
 # nPorts denote the number of ports, >=1 (because GND is always a port node)
 # PRNG are given random numbers, usually of size m (# of edges) for the worst case
