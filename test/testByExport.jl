@@ -422,7 +422,432 @@ b = lap(a)*x
 b[S] .= 0
 @test sum(abs.(b)) < 1e-6
 
+#now test partitioned functions 
+#testcase 1, simple H tree partitioned into two parts
+#part 1:
+# global indexing                         local indexing
+#   1                                       1
+#   |                                       |
+#   |                                       |
+#   3---6                                   3---4
+#   |                                       |
+#   |                                       |
+#   2                                       2
+I1 = [1, 3, 2, 3, 3, 4]; 
+J1 = [3, 1, 3, 2, 4, 3];
+V1 = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+adjGraph1 = SparseArrays.sparse(I1, J1, V1, 4, 4);
 
+#part 2
+#   4                                      1
+#   |                                      |
+#   |                                      |
+#   6                                      3
+#   |                                      |
+#   |                                      |
+#   5                                      2
+I2 = [1, 3, 2, 3]; 
+J2 = [3, 1, 3, 2];
+V2 = [1.0, 1.0, 1.0, 1.0];
+adjGraph2 = SparseArrays.sparse(I2, J2, V2, 3, 3);
+
+las = [Laplacians.lap(adjGraph1), Laplacians.lap(adjGraph2)];
+portVecs = [[1], [1]];
+indexOffsets = [0, 3];
+numInternalNode = 5;
+numInternalNodes = [3, 2];
+numPort = 1;
+y = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+Laplacians.LaplacianVectorMult!(las, y, numInternalNodes, indexOffsets, portVecs, numInternalNode, numPort);
+#y should be all 0
+@test sum(abs.(y))<1e-10
+
+#the aggregated graph
+#  1  4
+#  |  |
+#  |  |
+#  3--6
+#  |  |
+#  |  |
+#  2  5
+II = [1, 3, 2, 3, 4, 6, 5, 6, 3, 6];
+JJ = [3, 1, 3, 2, 6, 4, 6, 5, 6, 3];
+VV = [1.0, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+adjGraph = SparseArrays.sparse(II, JJ, VV, 6, 6);
+la = Laplacians.lap(adjGraph);
+for ii in 1:10
+    x = rand(6);
+    y = la*x;
+    Laplacians.LaplacianVectorMult!(las, x, numInternalNodes, indexOffsets, portVecs, numInternalNode, numPort);
+    #println(isapprox(x,y));
+    @test isapprox(x,y);
+end
+
+#test the schur complement aggregation
+schurC1 = SparseArrays.sparse([], [], Float64[], 1, 1);
+schurC2 = SparseArrays.sparse([], [], Float64[], 1, 1);
+schurCs = [schurC1, schurC2];
+schurC = Laplacians.schurComplement(schurCs, portVecs, numPort);
+
+#now test the condition number
+llmat1 = Laplacians.LLmatp(adjGraph1);
+llmat2 = Laplacians.LLmatp(adjGraph2);
+ldl1, schurC1 = Laplacians.approxChol(llmat1, 1);
+ldl2, schurC2 = Laplacians.approxChol(llmat2, 1);
+ldls = [ldl1, ldl2];
+schurCs = [schurC1, schurC2];
+adjGraphs = [adjGraph1, adjGraph2];
+@test isapprox(abs(Laplacians.condNumber(adjGraphs, ldls, schurCs, portVecs, numPort, verbose=true)),1);
+
+#Second testcase grid2_3
+#part 1
+#global view                local view
+# 6----7                    3----4
+# |    |                    |    |
+# |    |                    |    |
+# 1----5                    1----2
+I1 = [1, 2, 1, 3, 3, 4, 2, 4];
+J1 = [2, 1, 3, 1, 4, 3, 4, 2];
+V1 = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+adjGraph1 = SparseArrays.sparse(I1, J1, V1, 4, 4);
+portVec1 = [1, 2, 3];
+llmat1 = Laplacians.LLmatp(adjGraph1);
+ldl1, schurC1 = Laplacians.approxChol(llmat1, 3);
+
+#part 2
+#global view                local view
+# 7----8                    3----4
+#      |                         |
+#      |                         |
+# 5----2                    2----1
+I2 = [1, 2, 1, 4, 3, 4];
+J2 = [2, 1, 4, 1, 4, 3];
+V2 = [1.0, 1, 1, 1, 1, 1];
+adjGraph2 = SparseArrays.sparse(I2, J2, V2, 4, 4);
+portVec2 = [1, 3, 4];
+llmat2 = Laplacians.LLmatp(adjGraph2);
+ldl2, schurC2 = Laplacians.approxChol(llmat2, 3);
+
+
+#part 3
+#global view                local view
+# 3----9                    1----4
+# |    |                    |    |
+# |    |                    |    |
+# 6    7                    2    3
+I3 = [1, 2, 1, 4, 3, 4];
+J3 = [2, 1, 4, 1, 4, 3];
+V3 = [1.0, 1, 1, 1, 1, 1];
+adjGraph3 = SparseArrays.sparse(I3, J3, V3, 4, 4);
+portVec3 = [2, 3, 5];
+llmat3 = Laplacians.LLmatp(adjGraph3);
+ldl3, schurC3 = Laplacians.approxChol(llmat3, 3);
+
+
+#part 4
+#global view                local view
+# 9----4                    3----1
+#      |                         |
+#      |                         |
+#      8                         2
+I4 = [1, 3, 2, 1];
+J4 = [3, 1, 1, 2];
+V4 = [1.0, 1.0, 1.0, 1.0];
+adjGraph4 = SparseArrays.sparse(I4, J4, V4, 3, 3);
+portVec4 = [4, 5];
+llmat4 = Laplacians.LLmatp(adjGraph4);
+ldl4, schurC4 = Laplacians.approxChol(llmat4, 2);
+
+#first calculate required dims and parameters
+adjGraphs = [adjGraph1, adjGraph2, adjGraph3, adjGraph4];
+las = [Laplacians.lap(adjGraph1), Laplacians.lap(adjGraph2), Laplacians.lap(adjGraph3), Laplacians.lap(adjGraph4)];
+portVecs = [portVec1, portVec2, portVec3, portVec4];
+numPart = size(adjGraphs, 1);
+numNodes = Array{Int64}(undef, numPart);
+numPorts = Array{Int64}(undef, numPart);
+for ii in 1:numPart
+    numNodes[ii] = adjGraphs[ii].m;#adjGraphs[ii].m should be equal to adjGraphs[ii].n
+    numPorts[ii] = size(portVecs[ii], 1);       
+end
+numInternalNodes = numNodes .- numPorts;
+indexOffsets = accumulate(+, [0; numInternalNodes[1:end-1]]);
+numInternalNode = sum(numInternalNodes);
+numPort = 5;
+
+#test laplacian matrix vector multiplication
+adjGraph = Laplacians.grid2(3);
+(II, JJ, VV) = SparseArrays.findnz(adjGraph);
+#permute
+P = [1, 5, 2, 6, 7, 8, 3, 9, 4];
+IIp = P[II];
+JJp = P[JJ];
+adjGraphP = SparseArrays.sparse(IIp, JJp, VV, 9, 9);
+la = Laplacians.lap(adjGraphP);
+for ii in 1:10
+    x = rand(9);
+    y = la*x;
+    Laplacians.LaplacianVectorMult!(las, x, numInternalNodes, indexOffsets, portVecs, numInternalNode, numPort);
+    #println(isapprox(x,y));
+    @test isapprox(x,y);
+end
+
+ldls = [ldl1, ldl2, ldl3, ldl4];
+schurCs = [schurC1, schurC2, schurC3, schurC4];
+#then test the aggregated schur complement
+schurC = Laplacians.schurComplement(schurCs, portVecs, numPort);
+
+@test isapprox(abs(Laplacians.condNumber(adjGraphs, ldls, schurCs, portVecs, numPort, verbose=true)),1);
+
+
+#let's test permuted icm10 post
+#part 1
+# global view                    local view
+# 1---5                          1---4
+# |                              |
+# |                              |
+# 2---4                          2---3
+I1 = [1, 2, 1, 4, 2, 3];
+J1 = [2, 1, 4, 1, 3, 2];
+V1 = [1.0, 1, 1, 1, 2, 2];
+adjGraph1 = SparseArrays.sparse(I1, J1, V1, 4, 4);
+portVec1 = [1, 2];
+
+#part 2
+# global view                    local view
+# 5---3                          3---1
+# |   |                          |   |
+# |   |                          |   |
+# ----4                          ----2
+I2 = [1, 2, 1, 3, 2, 3];
+J2 = [2, 1, 3, 1, 3, 2];
+V2 = [1.0, 1, 1, 1, 1, 1];
+adjGraph2 = SparseArrays.sparse(I2, J2, V2, 3, 3);
+#[1,2] or [2, 1] should be both okay
+portVec2 = [2, 1];
+
+adjGraphs = [adjGraph1, adjGraph2];
+portVecs = [portVec1, portVec2];
+
+llmat1 = Laplacians.LLmatp(adjGraph1);
+llmat2 = Laplacians.LLmatp(adjGraph2);
+ldl1, schurC1 = Laplacians.approxChol(llmat1, 2);
+ldl2, schurC2 = Laplacians.approxChol(llmat2, 2);
+ldls = [ldl1, ldl2];
+schurCs = [schurC1, schurC2];
+numPort = 2;
+@test isapprox(abs(Laplacians.condNumber(adjGraphs, ldls, schurCs, portVecs, numPort, verbose=true)),1);
+
+#lets test larger grid 2's 
+
+nGrid = 1;
+#generate one part of grid2(nGrid);
+adjGraph1 = Laplacians.grid2(nGrid);
+(I1, J1, V1) = SparseArrays.findnz(adjGraph1);
+#add edges to bottom line
+for ii in 1:nGrid
+    append!(I1, ii);
+    append!(J1, nGrid*nGrid + 1 + ii);
+    append!(V1, 1);
+
+    append!(J1, ii);
+    append!(I1, nGrid*nGrid + 1 + ii);
+    append!(V1, 1);
+end
+#add edges to vertical line
+for ii in 1:nGrid
+    append!(I1, (ii-1)*nGrid + 1);
+    append!(J1, nGrid*nGrid + 1 + nGrid + ii);
+    append!(V1, 1);
+
+    append!(J1, (ii-1)*nGrid + 1);
+    append!(I1, nGrid*nGrid + 1 + nGrid + ii);
+    append!(V1, 1);
+end
+#add the bottom line
+for ii in 1:nGrid
+    append!(I1, nGrid*nGrid + ii);
+    append!(J1, nGrid*nGrid + ii + 1);
+    append!(V1, 1);
+
+    append!(J1, nGrid*nGrid + ii);
+    append!(I1, nGrid*nGrid + ii + 1);
+    append!(V1, 1);
+end
+adjGraphi = SparseArrays.sparse(I1, J1, V1, (nGrid+1)*(nGrid+1), (nGrid+1)*(nGrid+1));
+portVec1 = collect(1:(2*nGrid +1));
+portVec2 = [1;collect((nGrid+2): (3*nGrid+1))];
+portVec3 = [1;collect((2nGrid+2): (4*nGrid+1))];
+portVec4 = [1;collect((3nGrid+2): (4*nGrid+1)); collect(2: (nGrid+1))];
+
+adjGraphs = [adjGraphi, adjGraphi, adjGraphi, adjGraphi];
+las = [Laplacians.lap(adjGraphi), Laplacians.lap(adjGraphi), Laplacians.lap(adjGraphi), Laplacians.lap(adjGraphi)];
+portVecs = [portVec1, portVec2, portVec3, portVec4];
+numPart = size(adjGraphs, 1);
+numNodes = Array{Int64}(undef, numPart);
+numPorts = Array{Int64}(undef, numPart);
+for ii in 1:numPart
+    numNodes[ii] = adjGraphs[ii].m;#adjGraphs[ii].m should be equal to adjGraphs[ii].n
+    numPorts[ii] = size(portVecs[ii], 1);       
+end
+numInternalNodes = numNodes .- numPorts;
+indexOffsets = accumulate(+, [0; numInternalNodes[1:end-1]]);
+numInternalNode = sum(numInternalNodes);
+numPort = 5;
+
+
+#test the Laplacian matrix vector multiplication
+adjGraph = Laplacians.grid2(3);
+(II, JJ, VV) = SparseArrays.findnz(adjGraph);
+#permute
+P = [3, 9, 4, 8, 5, 6, 2, 7, 1];
+IIp = P[II];
+JJp = P[JJ];
+adjGraphP = SparseArrays.sparse(IIp, JJp, VV, 9, 9);
+la = Laplacians.lap(adjGraphP);
+for ii in 1:10
+    x = rand(9);
+    y = la*x;
+    Laplacians.LaplacianVectorMult!(las, x, numInternalNodes, indexOffsets, portVecs, numInternalNode, numPort);
+    #println(isapprox(x,y));
+    @test isapprox(x,y);
+end
+
+#test condition number
+llmati = Laplacians.LLmatp(adjGraphi);
+ldli, schurCi = Laplacians.approxChol(llmati, 3);
+
+ldls = [ldli, ldli, ldli, ldli];
+schurCs = [schurCi, schurCi, schurCi, schurCi];
+adjGraphs = [adjGraphi, adjGraphi, adjGraphi, adjGraphi];
+@test isapprox(abs(Laplacians.condNumber(adjGraphs, ldls, schurCs, portVecs, numPort, verbose=true)),1);
+
+#test larger grid2
+nGrid = 50;
+#generate one part of grid2(nGrid);
+adjGraph1 = Laplacians.grid2(nGrid);
+(I1, J1, V1) = SparseArrays.findnz(adjGraph1);
+#add edges to bottom line
+for ii in 1:nGrid
+    append!(I1, ii);
+    append!(J1, nGrid*nGrid + 1 + ii);
+    append!(V1, 1);
+
+    append!(J1, ii);
+    append!(I1, nGrid*nGrid + 1 + ii);
+    append!(V1, 1);
+end
+#add edges to vertical line
+for ii in 1:nGrid
+    append!(I1, (ii-1)*nGrid + 1);
+    append!(J1, nGrid*nGrid + 1 + nGrid + ii);
+    append!(V1, 1);
+
+    append!(J1, (ii-1)*nGrid + 1);
+    append!(I1, nGrid*nGrid + 1 + nGrid + ii);
+    append!(V1, 1);
+end
+#add the bottom line
+for ii in 1:nGrid
+    append!(I1, nGrid*nGrid + ii);
+    append!(J1, nGrid*nGrid + ii + 1);
+    append!(V1, 1);
+
+    append!(J1, nGrid*nGrid + ii);
+    append!(I1, nGrid*nGrid + ii + 1);
+    append!(V1, 1);
+end
+adjGraphi = SparseArrays.sparse(I1, J1, V1, (nGrid+1)*(nGrid+1), (nGrid+1)*(nGrid+1));
+portVec1 = collect(1:(2*nGrid +1));
+portVec2 = [1;collect((nGrid+2): (3*nGrid+1))];
+portVec3 = [1;collect((2nGrid+2): (4*nGrid+1))];
+portVec4 = [1;collect((3nGrid+2): (4*nGrid+1)); collect(2: (nGrid+1))];
+
+adjGraphs = [adjGraphi, adjGraphi, adjGraphi, adjGraphi];
+las = [Laplacians.lap(adjGraphi), Laplacians.lap(adjGraphi), Laplacians.lap(adjGraphi), Laplacians.lap(adjGraphi)];
+portVecs = [portVec1, portVec2, portVec3, portVec4];
+numPart = size(adjGraphs, 1);
+numNodes = Array{Int64}(undef, numPart);
+numPorts = Array{Int64}(undef, numPart);
+for ii in 1:numPart
+    numNodes[ii] = adjGraphs[ii].m;#adjGraphs[ii].m should be equal to adjGraphs[ii].n
+    numPorts[ii] = size(portVecs[ii], 1);       
+end
+numInternalNodes = numNodes .- numPorts;
+indexOffsets = accumulate(+, [0; numInternalNodes[1:end-1]]);
+numInternalNode = sum(numInternalNodes);
+numPort = 4*nGrid + 1;
+
+#test condition number
+llmati = Laplacians.LLmatp(adjGraphi);
+ldli, schurCi = Laplacians.approxChol(llmati, 2*nGrid+1);
+
+ldls = [ldli, ldli, ldli, ldli];
+schurCs = [schurCi, schurCi, schurCi, schurCi];
+@test abs(Laplacians.condNumber(adjGraphs, ldls, schurCs, portVecs, numPort, verbose=true))<20;#should be 12-15
+
+#even larger
+nGrid = 1500;
+#generate one part of grid2(nGrid);
+adjGraph1 = Laplacians.grid2(nGrid);
+(I1, J1, V1) = SparseArrays.findnz(adjGraph1);
+#add edges to bottom line
+for ii in 1:nGrid
+    append!(I1, ii);
+    append!(J1, nGrid*nGrid + 1 + ii);
+    append!(V1, 1);
+
+    append!(J1, ii);
+    append!(I1, nGrid*nGrid + 1 + ii);
+    append!(V1, 1);
+end
+#add edges to vertical line
+for ii in 1:nGrid
+    append!(I1, (ii-1)*nGrid + 1);
+    append!(J1, nGrid*nGrid + 1 + nGrid + ii);
+    append!(V1, 1);
+
+    append!(J1, (ii-1)*nGrid + 1);
+    append!(I1, nGrid*nGrid + 1 + nGrid + ii);
+    append!(V1, 1);
+end
+#add the bottom line
+for ii in 1:nGrid
+    append!(I1, nGrid*nGrid + ii);
+    append!(J1, nGrid*nGrid + ii + 1);
+    append!(V1, 1);
+
+    append!(J1, nGrid*nGrid + ii);
+    append!(I1, nGrid*nGrid + ii + 1);
+    append!(V1, 1);
+end
+adjGraphi = SparseArrays.sparse(I1, J1, V1, (nGrid+1)*(nGrid+1), (nGrid+1)*(nGrid+1));
+portVec1 = collect(1:(2*nGrid +1));
+portVec2 = [1;collect((nGrid+2): (3*nGrid+1))];
+portVec3 = [1;collect((2nGrid+2): (4*nGrid+1))];
+portVec4 = [1;collect((3nGrid+2): (4*nGrid+1)); collect(2: (nGrid+1))];
+
+adjGraphs = [adjGraphi, adjGraphi, adjGraphi, adjGraphi];
+las = [Laplacians.lap(adjGraphi), Laplacians.lap(adjGraphi), Laplacians.lap(adjGraphi), Laplacians.lap(adjGraphi)];
+portVecs = [portVec1, portVec2, portVec3, portVec4];
+numPart = size(adjGraphs, 1);
+numNodes = Array{Int64}(undef, numPart);
+numPorts = Array{Int64}(undef, numPart);
+for ii in 1:numPart
+    numNodes[ii] = adjGraphs[ii].m;#adjGraphs[ii].m should be equal to adjGraphs[ii].n
+    numPorts[ii] = size(portVecs[ii], 1);       
+end
+numInternalNodes = numNodes .- numPorts;
+indexOffsets = accumulate(+, [0; numInternalNodes[1:end-1]]);
+numInternalNode = sum(numInternalNodes);
+numPort = 4*nGrid + 1;
+
+#test condition number
+llmati = Laplacians.LLmatp(adjGraphi);
+ldli, schurCi = Laplacians.approxChol(llmati, 2*nGrid+1);
+
+ldls = [ldli, ldli, ldli, ldli];
+schurCs = [schurCi, schurCi, schurCi, schurCi];
+@test abs(Laplacians.condNumber(adjGraphs, ldls, schurCs, portVecs, numPort, verbose=true))<20;#should be 12-15
 
 
 println("End of testByExport")
