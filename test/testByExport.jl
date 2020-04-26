@@ -215,6 +215,38 @@ Ar = Ar + Ar';
 @test norm(lap(Ar)-Lio, 2)<=1e-10
 rm("tmp.txt")
 
+Laplacians.write_tesla("tmp.txt", LioSparse);
+#the golden should be
+#1 1 2.0
+#2 2 3.0
+#3 3 2.0
+#4 4 4.0
+#1 2 -1.0
+#2 3 -1.0
+#2 4 -1.0
+#3 4 -1.0
+
+#now read back from tmp
+A = Laplacians.read_tesla("tmp.txt", 4);
+#the golden of A should be [2 -1 0 0; -1 3 -1 -1; 0 -1 2 -1; 0 -1 -1 4];
+@test LinearAlgebra.norm(A-Lio[1:4, 1:4],2)<=1e-10
+#test writing graph to (i, j, v) format
+(ai, aj, av, n) = Laplacians.tesla_to_graph("tmp.txt", 4);
+#golden of (ai, aj, av) should be
+#2 1 1
+#3 2 1
+#4 2 1
+#4 3 1
+#5 1 1
+#5 4 2
+
+#create the adj matrix based on i,j,v
+#n = 5;
+Ar = SparseArrays.sparse(ai, aj, av, n, n);
+Ar = Ar + Ar';
+@test LinearAlgebra.norm(Laplacians.lap(Ar)-Lio, 2)<=1e-10
+rm("tmp.txt")
+
 # export unweight, unweight!
 
 a2 = unweight(a2)
@@ -847,7 +879,7 @@ ldli, schurCi = Laplacians.approxChol(llmati, 2*nGrid+1);
 
 ldls = [ldli, ldli, ldli, ldli];
 schurCs = [schurCi, schurCi, schurCi, schurCi];
-@test abs(Laplacians.condNumber(adjGraphs, ldls, schurCs, portVecs, numPort, verbose=true))<20;#should be 12-15
+@test abs(Laplacians.condNumber(adjGraphs, ldls, schurCs, portVecs, numPort, verbose=true))<40;#should be 20-25
 
 
 println("End of testByExport")

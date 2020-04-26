@@ -88,6 +88,44 @@ function read_matrix_market(fn::AbstractString)
 	a = a + sparse(diag_list[:,1], diag_list[:,2], diag_wt, n, n);
 end
 
+#the function to read so-called tesla matrix format, different from matrix market format
+function read_tesla(fn::AbstractString, n::Tind) where Tind
+	data = readdlm(fn);
+    #extract the I, J indices
+    IJ = convert(Array{Tind, 2}, data[:, 1:2]);
+    #extract the V column
+    V = convert(Array{Float64, 1}, data[:, 3]);
+    #let's build this upper triangular matrix 
+    ATriu = SparseArrays.sparse(IJ[:,1], IJ[:,2], V, n, n);
+    #get the diagonal part
+    ADiag = LinearAlgebra.diag(ATriu);
+    #get the upper triangular part
+    ATriu = LinearAlgebra.triu(ATriu, 1);
+    A = ATriu + ATriu' + LinearAlgebra.Diagonal(ADiag);
+    return A;
+end
+
+#the function to translate tesla format into adj graph
+function tesla_to_graph(fn::AbstractString, nTesla::Tind) where Tind
+    #first we need to read in the file in tesla format
+    A = read_tesla(fn, nTesla);
+	if size(A,1) != size(A,2)
+		println("can only deal with square matrices");
+	end
+	n = size(A, 1) + 1;
+	#sum up rows of A to get the connection to the gnd node (reference node)
+	hidden_wt = sum(A, dims=1);
+	#set the threshold to 10^-9 for meaningful conductance
+	hidden_wt[hidden_wt.<10^-9].=0;
+	hidden_wt = sparse(hidden_wt);
+	(hi, hj, hv) = findnz(hidden_wt);
+	(ai, aj, av) = findnz(tril(A, -1));
+	ai = vcat(ai, n*ones(Int64, size(hi,1)));
+	aj = vcat(aj, hj);
+	av = vcat(-av, hv);
+	return ai, aj, av, n
+end
+
 #the function to read the rhs format from Lengfei
 #basically we ignore the first column and sum up the entire second column to get gnd current value
 function read_rhs(fn::AbstractString)
@@ -161,6 +199,28 @@ function write_matrix_market(filename::AbstractString, mat::SparseMatrixCSC)
 	end
 	#now write the off diagonal elements
 	(ai, aj, av) = findnz(tril(A, -1));
+	for i in 1:length(ai)
+		write(fh, "$(ai[i]) $(aj[i]) $(av[i])\n");
+	end
+	close(fh);
+end
+
+#the function to write a Laplacian matrix as the tesla format
+function write_tesla(filename::AbstractString, mat::SparseMatrixCSC)
+	n = size(mat,1);
+	if n != size(mat,2)
+		println("The given matrix dimensions are not consistent");
+	end
+	A = mat[1:end-1, 1:end-1];
+	fh = open(filename, "w");
+	#write all diag elements
+	diag_wt = diag(A, 0);#usually this is a dense vector (for connected graphs)
+	diag_list = 1:n-1;
+	for i in 1:n-1
+		write(fh, "$(diag_list[i]) $(diag_list[i]) $(diag_wt[i])\n");
+	end
+	#now write the off diagonal elements
+	(ai, aj, av) = findnz(triu(A, 1));
 	for i in 1:length(ai)
 		write(fh, "$(ai[i]) $(aj[i]) $(av[i])\n");
 	end
