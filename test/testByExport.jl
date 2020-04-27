@@ -494,6 +494,7 @@ Laplacians.LaplacianVectorMult!(las, y, numInternalNodes, indexOffsets, portVecs
 #y should be all 0
 @test sum(abs.(y))<1e-10
 
+
 #the aggregated graph
 #  1  4
 #  |  |
@@ -506,6 +507,7 @@ II = [1, 3, 2, 3, 4, 6, 5, 6, 3, 6];
 JJ = [3, 1, 3, 2, 6, 4, 6, 5, 6, 3];
 VV = [1.0, 1, 1, 1, 1, 1, 1, 1, 1, 1];
 adjGraph = SparseArrays.sparse(II, JJ, VV, 6, 6);
+
 la = Laplacians.lap(adjGraph);
 for ii in 1:10
     x = rand(6);
@@ -530,6 +532,10 @@ ldls = [ldl1, ldl2];
 schurCs = [schurC1, schurC2];
 adjGraphs = [adjGraph1, adjGraph2];
 @test isapprox(abs(Laplacians.condNumber(adjGraphs, ldls, schurCs, portVecs, numPort, verbose=true)),1);
+
+#let's also test whether aggregated adjGraph is correct
+adjGraphT = Laplacians.fullAdjGraph(adjGraphs, portVecs, numPort);
+@test isapprox(LinearAlgebra.norm(adjGraph - adjGraphT), 0);
 
 #Second testcase grid2_3
 #part 1
@@ -622,6 +628,9 @@ for ii in 1:10
     #println(isapprox(x,y));
     @test isapprox(x,y);
 end
+#let's also test whether aggregated adjGraph is correct
+adjGraphT = Laplacians.fullAdjGraph(adjGraphs, portVecs, numPort);
+@test isapprox(LinearAlgebra.norm(adjGraphP - adjGraphT), 0);
 
 ldls = [ldl1, ldl2, ldl3, ldl4];
 schurCs = [schurC1, schurC2, schurC3, schurC4];
@@ -743,6 +752,10 @@ for ii in 1:10
     #println(isapprox(x,y));
     @test isapprox(x,y);
 end
+
+#let's also test whether aggregated adjGraph is correct
+adjGraphT = Laplacians.fullAdjGraph(adjGraphs, portVecs, numPort);
+@test isapprox(LinearAlgebra.norm(adjGraphP - adjGraphT), 0);
 
 #test condition number
 llmati = Laplacians.LLmatp(adjGraphi);

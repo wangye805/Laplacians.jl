@@ -1890,6 +1890,56 @@ function LaplacianVectorMult!(las::Array{SparseMatrixCSC{Tval, Tind}, 1}, #graph
 end
 
 """
+The function to get the full adj graph from partitioned version
+"""
+function fullAdjGraph(adjGraphs::Array{SparseMatrixCSC{Tval, Tind}, 1}, #adj graph for each partition
+                  portVecs::Array{Array{Tind, 1}, 1}, #port mapping vectors (from each partition to aggregated ports)
+                  numPort::Tind; #total number of ports
+                  verbose=false) where {Tind, Tval}
+
+    #check partition size
+    numPart = size(adjGraphs, 1);
+    @assert(numPart == size(portVecs, 1));
+    #first calculate problem size: total # of nodes, # of ports, # of internal nodes
+    numNodes = Array{Tind}(undef, numPart);
+    numPorts = Array{Tind}(undef, numPart);
+    for ii in 1:numPart
+        numNodes[ii] = adjGraphs[ii].m;#adjGraphs[ii].m should be equal to adjGraphs[ii].n
+        numPorts[ii] = size(portVecs[ii], 1);       
+    end
+    numInternalNodes = numNodes .- numPorts;
+    indexOffsets = accumulate(+, [0; numInternalNodes[1:end-1]]);
+    numInternalNode = sum(numInternalNodes);
+
+    I = Tind[];
+    J = Tind[];
+    V = Tind[];
+    #initialize an empty result adjGraph
+    for ii in 1:numPart
+        (Iii, Jii, Vii) = findnz(adjGraphs[ii]);
+        @inbounds for jj in 1:size(Vii, 1)
+            #process I vector
+            if Iii[jj]>numInternalNodes[ii] #port node
+                Iii[jj] = numInternalNode + (portVecs[ii])[Iii[jj] - numInternalNodes[ii]];
+            else #internal node
+                Iii[jj] = Iii[jj] + indexOffsets[ii];
+            end
+            #same for J vector
+            if Jii[jj]>numInternalNodes[ii] #port node
+                Jii[jj] = numInternalNode + (portVecs[ii])[Jii[jj] - numInternalNodes[ii]];
+            else #internal node
+                Jii[jj] = Jii[jj] + indexOffsets[ii];
+            end
+        end
+        I = [I; Iii];
+        J = [J; Jii];
+        V = [V; Vii];
+    end
+    adjGraph = sparse(I, J, V, numInternalNode+numPort, numInternalNode+numPort)
+    return adjGraph;
+end
+
+"""
 The function to aggregate partioned schur complements to a whole one
 """
 function schurComplement(schurCs::Array{SparseMatrixCSC{Tval, Tind}, 1}, #schur complement obtained through approximate factorization in each partition

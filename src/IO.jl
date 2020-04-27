@@ -92,16 +92,20 @@ end
 function read_tesla(fn::AbstractString, n::Tind) where Tind
 	data = readdlm(fn);
     #extract the I, J indices
-    IJ = convert(Array{Tind, 2}, data[:, 1:2]);
+    I = convert(Array{Tind, 1}, data[:, 1])
+    J = convert(Array{Tind, 1}, data[:, 2])
+    #IJ = convert(Array{Tind, 2}, data[:, 1:2]);
     #extract the V column
     V = convert(Array{Float64, 1}, data[:, 3]);
-    #let's build this upper triangular matrix 
-    ATriu = SparseArrays.sparse(IJ[:,1], IJ[:,2], V, n, n);
-    #get the diagonal part
-    ADiag = LinearAlgebra.diag(ATriu);
-    #get the upper triangular part
-    ATriu = LinearAlgebra.triu(ATriu, 1);
-    A = ATriu + ATriu' + LinearAlgebra.Diagonal(ADiag);
+    numElem = size(V, 1);
+    @inbounds for ii in 1:numElem
+        if I[ii]!=J[ii]
+            push!(I, J[ii]);
+            push!(J, I[ii]);
+            push!(V, V[ii]);
+        end
+    end
+    A = SparseArrays.sparse(I, J, V, n, n);
     return A;
 end
 
