@@ -730,18 +730,18 @@ end
 #can choose not to dump value by verbose option
 function dumpLDL(fh::IO, ldl::LDL{Tind, Tval}, verbose = true) where {Tind,Tval}
     #print n
-    write(fh, "n: $(ldl.n)\n")
+    write(fh, "n: \n$(ldl.n)\n")
     #print m
-    write(fh, "m: $(ldl.m)\n")
+    write(fh, "m: \n$(ldl.m)\n")
     #print perm_idx
-    write(fh, "perm_idx: $(ldl.perm_idx - 1)\n")
+    write(fh, "perm_idx: \n$(ldl.perm_idx - 1)\n")
     #print col array
     write(fh, "col: \n")
     for idx in ldl.col
         write(fh, "$(idx-1)\n")
     end
     #print current_row_ptr_A
-    write(fh, "current_row_ptr_A: $(ldl.current_row_ptr_A - 1)\n");
+    write(fh, "current_row_ptr_A: \n$(ldl.current_row_ptr_A - 1)\n");
     #print colptr_A
     write(fh, "colptr_A: \n")
     for idx in ldl.colptr_A
@@ -761,7 +761,7 @@ function dumpLDL(fh::IO, ldl::LDL{Tind, Tval}, verbose = true) where {Tind,Tval}
     end
 
     #print current_row_ptr_B
-    write(fh, "current_row_ptr_B: $(ldl.current_row_ptr_B - 1)\n");
+    write(fh, "current_row_ptr_B: \n$(ldl.current_row_ptr_B - 1)\n");
     #print colptr_B
     write(fh, "colptr_B: \n")
     for idx in ldl.colptr_B
@@ -788,6 +788,63 @@ function dumpLDL(fh::IO, ldl::LDL{Tind, Tval}, verbose = true) where {Tind,Tval}
     end
 end
 
+#the function to compare two LDL's
+function isapprox(ldl1::LDL{Tind, Tval}, ldl2::LDL{Tind, Tval}) where {Tind,Tval}
+    #compare each field of LDL
+    #compare m
+    if(!Base.isapprox(ldl1.n, ldl2.n))
+        return false;
+    end
+    #compare n
+    if(!Base.isapprox(ldl1.m, ldl2.m))
+        return false;
+    end
+    #compare col
+    if(!Base.isapprox(ldl1.col, ldl2.col))
+        return false;
+    end
+    #compare perm_idx
+    if(!Base.isapprox(ldl1.perm_idx, ldl2.perm_idx))
+        return false;
+    end
+    #compare current_row_ptr_A
+    if(!Base.isapprox(ldl1.current_row_ptr_A, ldl2.current_row_ptr_A))
+        return false;
+    end
+    #compare colptr_A
+    if(!Base.isapprox(ldl1.colptr_A, ldl2.colptr_A))
+        return false;
+    end
+    #compare rowval_A
+    if(!Base.isapprox(ldl1.rowval_A, ldl2.rowval_A))
+        return false;
+    end
+    #compare nzval_A
+    if(!Base.isapprox(ldl1.nzval_A, ldl2.nzval_A))
+        return false;
+    end
+    #compare current_row_ptr_B
+    if(!Base.isapprox(ldl1.current_row_ptr_B, ldl2.current_row_ptr_B))
+        return false;
+    end
+    #compare colptr_B
+    if(!Base.isapprox(ldl1.colptr_B, ldl2.colptr_B))
+        return false;
+    end
+    #compare rowval_B
+    if(!Base.isapprox(ldl1.rowval_B, ldl2.rowval_B))
+        return false;
+    end
+    #compare nzval_B
+    if(!Base.isapprox(ldl1.nzval_B, ldl2.nzval_B))
+        return false;
+    end
+    #compare diagA
+    if(!Base.isapprox(ldl1.diagA, ldl2.diagA))
+        return false;
+    end
+    return true;
+end
 
 #the function to dump SchurComplement
 #for debugging only
@@ -795,14 +852,16 @@ end
 #can choose not to dump value by verbose option
 function dumpSchurC(fh::IO, schurC::SparseMatrixCSC{Tval, Tind}, verbose = true) where {Tind,Tval}
     #print m
-    write(fh, "m: $(schurC.m)\n");
+    write(fh, "m: \n$(schurC.m)\n");
     #print n
-    write(fh, "n: $(schurC.n)\n");
+    write(fh, "n: \n$(schurC.n)\n");
     #print colptr
     write(fh, "colptr: \n")
     for idx in schurC.colptr
         write(fh, "$(idx-1)\n")
     end
+    #print nnz
+    write(fh, "nnz: \n$(size(schurC.rowval, 1))\n");
     #print rowval
     write(fh, "rowval: \n")
     for idx in schurC.rowval

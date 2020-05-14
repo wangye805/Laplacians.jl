@@ -894,5 +894,28 @@ ldls = [ldli, ldli, ldli, ldli];
 schurCs = [schurCi, schurCi, schurCi, schurCi];
 @test abs(Laplacians.condNumber(adjGraphs, ldls, schurCs, portVecs, numPort, verbose=true))<40;#should be 20-25
 
+#test dump LDL, schurC and load LDL, schurC
+adjGraph = Laplacians.grid2(3);
+llmat = Laplacians.LLmatp(adjGraph);
+ldl, schurC = Laplacians.approxChol(llmat, 1);
+#dump the obtained ldl, schurC
+Laplacians.dumpApproxFact("grid_2_3_1", ldl, schurC);
+#read the dumped file
+ldlBak, schurCBak = Laplacians.loadApproxFact("grid_2_3_1");
+@test Laplacians.isapprox(ldl, ldlBak);
+@test isapprox(schurC, schurCBak);
+rm("grid_2_3_1")
+
+#test dump and load with larger testcases
+adjGraph = Laplacians.grid2(100);
+llmat = Laplacians.LLmatp(adjGraph);
+ldl, schurC = Laplacians.approxChol(llmat, 50);
+#dump the obtained ldl, schurC
+Laplacians.dumpApproxFact("grid_2_100_50", ldl, schurC);
+#read the dumped file
+ldlBak, schurCBak = Laplacians.loadApproxFact("grid_2_100_50");
+@test Laplacians.isapprox(ldl, ldlBak);
+@test isapprox(schurC, schurCBak);
+rm("grid_2_100_50")
 
 println("End of testByExport")

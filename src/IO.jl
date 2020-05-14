@@ -230,3 +230,128 @@ function write_tesla(filename::AbstractString, mat::SparseMatrixCSC)
 	end
 	close(fh);
 end
+
+
+
+#load a int64 data point from dumped file
+function loadInt64(fh::IO, lineNum::Int64)
+    #read the first extra line (m: n: and extra)
+    line = readline(fh);
+    lineNum +=1;
+    #read the real data line
+    line = readline(fh);
+    lineNum +=1;
+    val = parse(Int64, line);
+    return val, lineNum;
+end
+
+#load array of int64 data from dumped file
+function loadArrayInt64(fh::IO, lineNum::Int64, numData::Int64)
+    line = readline(fh);
+    lineNum += 1;
+    data = Int64[];
+    for ii in 1:numData
+        line = readline(fh);
+        lineNum += 1;                   
+        push!(data, parse(Int64, line));
+    end
+    return data, lineNum;
+end
+
+#load array of Float64 data from dumped file
+function loadArrayFloat64(fh::IO, lineNum::Int64, numData::Int64)
+    line = readline(fh);
+    lineNum += 1;
+    data = Float64[];
+    for ii in 1:numData
+        line = readline(fh);
+        lineNum += 1;                   
+        push!(data, parse(Float64, line));
+    end
+    return data, lineNum;
+end
+
+#load dumped LDL from a file handle
+function loadLDL(fh::IO, lineNum)
+    #read n of LDL
+    n, lineNum = loadInt64(fh, lineNum);
+
+    #read m of LDL
+    m, lineNum = loadInt64(fh, lineNum);
+
+    #read perm_idx of LDL
+    perm_idx, lineNum = loadInt64(fh, lineNum);
+    perm_idx += 1;
+
+    #read col of LDL of size n
+    col, lineNum = loadArrayInt64(fh, lineNum, n);
+    col = col .+ 1;
+
+    #read current_row_ptr_A of LDL
+    current_row_ptr_A, lineNum = loadInt64(fh, lineNum);
+    current_row_ptr_A += 1;
+
+    #read colptr_A of LDL of size n+1
+    colptr_A, lineNum = loadArrayInt64(fh, lineNum, n + 1);
+    colptr_A = colptr_A .+ 1;
+
+    #read rowval_A in LDL, of size current_row_ptr_A - 1
+    rowval_A, lineNum = loadArrayInt64(fh, lineNum, current_row_ptr_A - 1);
+    rowval_A = rowval_A .+ 1;
+
+    #read nzval_A in LDL of size current_row_ptr_A - 1
+    nzval_A, lineNum = loadArrayFloat64(fh, lineNum, current_row_ptr_A - 1);
+
+    #read current_row_ptr_B of LDL
+    current_row_ptr_B, lineNum = loadInt64(fh, lineNum);
+    current_row_ptr_B += 1;
+
+    #read colptr_B in LDL of size n+1
+    colptr_B, lineNum = loadArrayInt64(fh, lineNum, n + 1);
+    colptr_B = colptr_B .+ 1;
+
+    #read rowval_B of LDL of size current_row_ptr_B - 1
+    rowval_B, lineNum = loadArrayInt64(fh, lineNum, current_row_ptr_B - 1);
+    rowval_B = rowval_B .+ 1;
+
+    #read nzval_B in LDL of size current_row_ptr_B
+    nzval_B, lineNum = loadArrayFloat64(fh, lineNum, current_row_ptr_B - 1);
+
+    #read diag in LDL of size n
+    diag, lineNum = loadArrayFloat64(fh, lineNum, n);
+
+    return LDL(n, m, perm_idx, col, current_row_ptr_A, colptr_A, rowval_A, nzval_A, current_row_ptr_B, colptr_B, rowval_B, nzval_B, diag), lineNum;
+end
+
+#load dumped schurC from a opened file handle
+function loadSchurC(fh::IO, lineNum)
+    #read m of LDL
+    m, lineNum = loadInt64(fh, lineNum);
+    #read n of LDL
+    n, lineNum = loadInt64(fh, lineNum);
+    #read colptr of size m + 1
+    colptr, lineNum = loadArrayInt64(fh, lineNum, m + 1);
+    colptr = colptr .+ 1;
+
+    #read size of nnz
+    nnz, lineNum = loadInt64(fh, lineNum);
+    #read rowval of size nnz
+    rowval, lineNum = loadArrayInt64(fh, lineNum, nnz);
+    rowval = rowval .+ 1;
+    #read nzval of size nnz
+    nzval, lineNum = loadArrayFloat64(fh, lineNum, nnz);
+    return SparseArrays.SparseMatrixCSC(m,n, colptr, rowval, nzval), lineNum;
+end
+
+#the function to load Approximate Factorization results from file
+#for debugging only
+#index written into the file has already been unified with C/C++ to start from 0
+#Tind by default is Int64 and Tval by default is Float64
+function loadApproxFact(filename::AbstractString)
+    fh = open(filename, "r");
+    lineNum = 0;
+    ldl, lineNum = loadLDL(fh, lineNum);
+    schurC, lineNum = loadSchurC(fh, lineNum);
+    close(fh);
+    return ldl, schurC
+end
