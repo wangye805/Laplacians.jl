@@ -101,10 +101,10 @@ end
 Print all column in an LLmatp matrix
 """
 function print_ll_mat(llmat::LLmatp)
-	@inbounds for i in 1:llmat.n
-		println("column $(i)");
-		print_ll_col(llmat, i)
-	end
+    @inbounds for i in 1:llmat.n
+        println("column $(i)");
+        print_ll_col(llmat, i)
+    end
 end
 
 """
@@ -265,7 +265,8 @@ end
 #specially used for schur complement
 function compressCol!(a::LLmatp{Tind,Tval},
   colspace::Vector{LLp{Tind,Tval}},
-  len::Int) where {Tind,Tval}
+  len::Int;
+  forSchurC=true) where {Tind,Tval}
 
     o = Base.Order.ord(isless, x->x.row, false, Base.Order.Forward)
 
@@ -285,9 +286,9 @@ function compressCol!(a::LLmatp{Tind,Tval},
 
         else
             c[ptr].val = c[ptr].val + c[i].val
-            #c[i].reverse.val = zero(Tval)
-
-            #approxCholPQDec!(pq, currow)
+            if (!forSchurC) #for schur complement, we do not need the next line
+                c[i].reverse.val = zero(Tval)
+            end
         end
     end
 
@@ -603,17 +604,15 @@ function approxChol(a::LLmatp{Tind,Tval}) where {Tind,Tval}
     return ldli
 end
 
-#the approximate cholesky with parameter of number of ports (>=1)
-function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind) where {Tind,Tval}
-	exactFactorization=true
-	nGraph = a.n
+#the approximate cholesky with given reduce order, PRNGs
+#used for debugging only
+function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind, order::Array{Tind, 1}, PRNGs::Array{Array{Tval,1}, 1}; debug = false) where {Tind,Tval}
+    exactFactorization=true
+    nGraph = a.n
     n = a.n - nPorts
-	
-	#replace with our LDL class
-	ldl = LDL(a, nPorts)
-
-	#now only feed in first n degs
-    pq = ApproxCholPQ(a.degs, n)
+    
+    #replace with our LDL class
+    ldl = LDL(a, nPorts)
 
     it = 1
 
@@ -623,20 +622,20 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind) where {Tind,Tval}
 
     o = Base.Order.ord(isless, identity, false, Base.Order.Forward)
 
+    #record the reduced degs at each step
+    reduceDegs = Array{Int64}(undef, n);
+
     @inbounds while it <= n
+        #use given order
+        i = order[it];
 
-        i = approxCholPQPop!(pq)
-		#println("pop out node $(i)");
-
-		#PrintApproxCholPQ(pq);
-
-		addColumn!(ldl, i);
+        addColumn!(ldl, i);
 
         it = it + 1
 
         len = get_ll_col(a, i, colspace)
 
-        len = compressCol!(a, colspace, len, pq)  #3hog
+        len = compressCol!(a, colspace, len; forSchurC=false)  #3hog
 
         csum = zero(Tval)
         for ii in 1:len
@@ -646,15 +645,18 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind) where {Tind,Tval}
         end
         wdeg = csum
 
-		#add the diagonal element
-		addDiag!(ldl, csum)
+        #add the diagonal element
+        addDiag!(ldl, csum)
 
         colScale = one(Tval)
-		
-		if len>=3
-			exactFactorization = false;
-		end
-
+        
+        if len>=3
+            exactFactorization = false;
+        end
+        #record reduce degs for each iteration of reduction
+        if debug
+            reduceDegs[i] = len;
+        end
         for joffset in 1:(len-1)
 
             ll = colspace[joffset]
@@ -662,24 +664,22 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind) where {Tind,Tval}
             j = ll.row
             revj = ll.reverse
 
-			#println("deal with node $(j) in col $(i)");
+            #println("deal with node $(j) in col $(i)");
 
             f = w/(wdeg)
 
-			addOffDiag!(ldl, j, vals[joffset])
+            addOffDiag!(ldl, j, vals[joffset])
 
             vals[joffset] = zero(Tval)
-
+            randVal = PRNGs[i][joffset];
             # kind = Laplacians.blockSample(vals,k=1)[1]
-            r = rand() * (csum - cumspace[joffset]) + cumspace[joffset]
+            r = randVal * (csum - cumspace[joffset]) + cumspace[joffset]
             koff = searchsortedfirst(cumspace,r,one(len),len,o)
 
             k = colspace[koff].row
-			#println("k is $(k)");
-            approxCholPQInc!(pq, k)
 
             newEdgeVal = f*(one(Tval)-f)*wdeg
-			#println("newEdgeVal is $(newEdgeVal)");
+            #println("newEdgeVal is $(newEdgeVal)");
 
             # fix row k in col j
             revj.row = k   # dense time hog: presumably becaus of cache
@@ -697,7 +697,7 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind) where {Tind,Tval}
 
             colScale = colScale*(one(Tval)-f)
             wdeg = wdeg*(one(Tval)-f)^2
-			
+            
         end # for
 
         ll = colspace[len]
@@ -705,23 +705,159 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind) where {Tind,Tval}
         j = ll.row
         revj = ll.reverse
 
-		#println("deal with last node $(j) in col $(i)");
+        #println("deal with last node $(j) in col $(i)");
 
-		addOffDiag!(ldl,j, vals[len]);
+        addOffDiag!(ldl,j, vals[len]);
+
+        revj.val = zero(Tval)
+        #lets print the graph in llmat 
+        #print_ll_mat(a);
+    end
+    debugInfo = [];
+    if debug
+        debugInfo = [reduceDegs];
+    end
+    finishColumn!(ldl)  
+    #println("is exact factorization? $(exactFactorization)")
+    #also the remaining schur complement graph (as adjacency matrix)
+    return ldl, schurComplement!(a, n), debugInfo
+end
+
+#the approximate cholesky with parameter of number of ports (>=1)
+#add the debug knob to print debugging info
+function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind; debug = false) where {Tind,Tval}
+    exactFactorization=true
+    nGraph = a.n
+    n = a.n - nPorts
+    
+    #replace with our LDL class
+    ldl = LDL(a, nPorts)
+
+    #now only feed in first n degs
+    pq = ApproxCholPQ(a.degs, n)
+
+    it = 1
+
+    colspace = Array{LLp{Tind,Tval}}(undef, nGraph)
+    cumspace = Array{Tval}(undef, nGraph)
+    vals = Array{Tval}(undef, nGraph) # will be able to delete this
+
+    o = Base.Order.ord(isless, identity, false, Base.Order.Forward)
+
+    #record the reduced degs at each step
+    reduceDegs = Array{Int64}(undef, n);
+    PRNGs = Array{Array{Tval,1}, 1}(undef, n);
+
+    @inbounds while it <= n
+
+        i = approxCholPQPop!(pq)
+        #println("pop out node $(i)");
+
+        #PrintApproxCholPQ(pq);
+
+        addColumn!(ldl, i);
+
+        it = it + 1
+
+        len = get_ll_col(a, i, colspace)
+
+        len = compressCol!(a, colspace, len, pq)  #3hog
+
+        csum = zero(Tval)
+        for ii in 1:len
+            vals[ii] = colspace[ii].val
+            csum = csum + colspace[ii].val
+            cumspace[ii] = csum
+        end
+        wdeg = csum
+
+        #add the diagonal element
+        addDiag!(ldl, csum)
+
+        colScale = one(Tval)
+        
+        if len>=3
+            exactFactorization = false;
+        end
+        #record reduce degs for each iteration of reduction
+        if debug
+            reduceDegs[i] = len;
+            PRNGs[i] = Tval[];
+        end
+        for joffset in 1:(len-1)
+
+            ll = colspace[joffset]
+            w = vals[joffset] * colScale
+            j = ll.row
+            revj = ll.reverse
+
+            #println("deal with node $(j) in col $(i)");
+
+            f = w/(wdeg)
+
+            addOffDiag!(ldl, j, vals[joffset])
+
+            vals[joffset] = zero(Tval)
+            randVal = rand();
+            #record PRNGs used in each node
+            if debug
+                push!(PRNGs[i], randVal);
+            end
+            # kind = Laplacians.blockSample(vals,k=1)[1]
+            r = randVal * (csum - cumspace[joffset]) + cumspace[joffset]
+            koff = searchsortedfirst(cumspace,r,one(len),len,o)
+
+            k = colspace[koff].row
+            #println("k is $(k)");
+            approxCholPQInc!(pq, k)
+
+            newEdgeVal = f*(one(Tval)-f)*wdeg
+            #println("newEdgeVal is $(newEdgeVal)");
+
+            # fix row k in col j
+            revj.row = k   # dense time hog: presumably becaus of cache
+            revj.val = newEdgeVal
+            revj.reverse = ll
+
+            # fix row j in col k
+            khead = a.cols[k]
+            a.cols[k] = ll
+            ll.next = khead
+            ll.reverse = revj
+            ll.val = newEdgeVal
+            ll.row = j
+
+
+            colScale = colScale*(one(Tval)-f)
+            wdeg = wdeg*(one(Tval)-f)^2
+            
+        end # for
+
+        ll = colspace[len]
+        w = vals[len] * colScale
+        j = ll.row
+        revj = ll.reverse
+
+        #println("deal with last node $(j) in col $(i)");
+
+        addOffDiag!(ldl,j, vals[len]);
 
         if it < nGraph
             approxCholPQDec!(pq, j)
         end
 
         revj.val = zero(Tval)
-		#lets print the graph in llmat 
-		#print_ll_mat(a);
+        #lets print the graph in llmat 
+        #print_ll_mat(a);
     end
-
-	finishColumn!(ldl)	
-	#println("is exact factorization? $(exactFactorization)")
-	#also the remaining schur complement graph (as adjacency matrix)
-    return ldl, schurComplement!(a, n)
+    debugInfo = [];
+    if debug
+        debugInfo = [reduceDegs, PRNGs];
+    end
+    finishColumn!(ldl)  
+    #println("is exact factorization? $(exactFactorization)")
+    #also the remaining schur complement graph (as adjacency matrix)
+    return ldl, schurComplement!(a, n), debugInfo
 end
 
 #the function to dump LDL
@@ -893,14 +1029,14 @@ end
 # nPorts denote the number of ports, >=1 (because GND is always a port node)
 # PRNG are given random numbers, usually of size m (# of edges) for the worst case
 function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind, PRNG::Array{Tval}) where {Tind,Tval}
-	exactFactorization=true
-	nGraph = a.n
+    exactFactorization=true
+    nGraph = a.n
     n = a.n - nPorts
-	
-	#replace with our LDL class
-	ldl = LDL(a, nPorts)
+    
+    #replace with our LDL class
+    ldl = LDL(a, nPorts)
 
-	#now only feed in first n degs
+    #now only feed in first n degs
     pq = ApproxCholPQ(a.degs, n)
 
     it = 1
@@ -911,16 +1047,16 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind, PRNG::Array{Tval}) where
 
     o = Base.Order.ord(isless, identity, false, Base.Order.Forward)
 
-	idxPRNG = 1;
+    idxPRNG = 1;
 
     @inbounds while it <= n
 
         i = approxCholPQPop!(pq)
-		#println("pop out node $(i)");
+        #println("pop out node $(i)");
 
-		#PrintApproxCholPQ(pq);
+        #PrintApproxCholPQ(pq);
 
-		addColumn!(ldl, i);
+        addColumn!(ldl, i);
 
         it = it + 1
 
@@ -936,14 +1072,14 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind, PRNG::Array{Tval}) where
         end
         wdeg = csum
 
-		#add the diagonal element
-		addDiag!(ldl, csum)
+        #add the diagonal element
+        addDiag!(ldl, csum)
 
         colScale = one(Tval)
-		
-		if len>=3
-			exactFactorization = false;
-		end
+        
+        if len>=3
+            exactFactorization = false;
+        end
 
         for joffset in 1:(len-1)
 
@@ -952,26 +1088,26 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind, PRNG::Array{Tval}) where
             j = ll.row
             revj = ll.reverse
 
-			#println("deal with node $(j) in col $(i)");
+            #println("deal with node $(j) in col $(i)");
 
             f = w/(wdeg)
 
-			addOffDiag!(ldl, j, vals[joffset])
+            addOffDiag!(ldl, j, vals[joffset])
 
             vals[joffset] = zero(Tval)
 
             # kind = Laplacians.blockSample(vals,k=1)[1]
             #r = rand() * (csum - cumspace[joffset]) + cumspace[joffset]
             r = PRNG[idxPRNG] * (csum - cumspace[joffset]) + cumspace[joffset]
-			idxPRNG = idxPRNG + 1;
+            idxPRNG = idxPRNG + 1;
             koff = searchsortedfirst(cumspace,r,one(len),len,o)
 
             k = colspace[koff].row
-			#println("k is $(k)");
+            #println("k is $(k)");
             approxCholPQInc!(pq, k)
 
             newEdgeVal = f*(one(Tval)-f)*wdeg
-			#println("newEdgeVal is $(newEdgeVal)");
+            #println("newEdgeVal is $(newEdgeVal)");
 
             # fix row k in col j
             revj.row = k   # dense time hog: presumably becaus of cache
@@ -989,7 +1125,7 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind, PRNG::Array{Tval}) where
 
             colScale = colScale*(one(Tval)-f)
             wdeg = wdeg*(one(Tval)-f)^2
-			
+            
         end # for
 
         ll = colspace[len]
@@ -997,22 +1133,22 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind, PRNG::Array{Tval}) where
         j = ll.row
         revj = ll.reverse
 
-		#println("deal with last node $(j) in col $(i)");
+        #println("deal with last node $(j) in col $(i)");
 
-		addOffDiag!(ldl,j, vals[len]);
+        addOffDiag!(ldl,j, vals[len]);
 
         if it < nGraph
             approxCholPQDec!(pq, j)
         end
 
         revj.val = zero(Tval)
-		#lets print the graph in llmat 
-		#print_ll_mat(a);
+        #lets print the graph in llmat 
+        #print_ll_mat(a);
     end
 
-	finishColumn!(ldl)	
-	#println("is exact factorization? $(exactFactorization)")
-	#also the remaining schur complement graph (as adjacency matrix)
+    finishColumn!(ldl)  
+    #println("is exact factorization? $(exactFactorization)")
+    #also the remaining schur complement graph (as adjacency matrix)
     return ldl, schurComplement!(a, n)
 end
 
@@ -1021,26 +1157,26 @@ The function to get the remaining schur complement from linked list matrix
 n is the number of internal nodes
 =============================================================#
 function schurComplement!(a::LLmatp{Tind,Tval}, n::Tind) where {Tind, Tval}
-	I = Tind[];
-	J = Tind[];
-	V = Tval[];
-	#prepare for loading each column
+    I = Tind[];
+    J = Tind[];
+    V = Tval[];
+    #prepare for loading each column
     colspace = Array{LLp{Tind,Tval}}(undef, a.n)
 
-	@inbounds for ii in n+1:1:a.n
+    @inbounds for ii in n+1:1:a.n
         len = get_ll_col(a, ii, colspace)
         len = compressCol!(a, colspace, len)  #3hog
-		@inbounds for jj in 1:1:len
-			#println("colspace[$(jj)]: row-> $(colspace[jj].row), val->$(colspace[jj].val)");
-			if colspace[jj].row>n
-				#(i, j, v)
-				push!(I, colspace[jj].row - n);
-				push!(J, ii - n);
-				push!(V, colspace[jj].val);
-			end
-		end
-	end
-	return sparse(I, J, V, a.n-n, a.n-n);
+        @inbounds for jj in 1:1:len
+            #println("colspace[$(jj)]: row-> $(colspace[jj].row), val->$(colspace[jj].val)");
+            if colspace[jj].row>n
+                #(i, j, v)
+                push!(I, colspace[jj].row - n);
+                push!(J, ii - n);
+                push!(V, colspace[jj].val);
+            end
+        end
+    end
+    return sparse(I, J, V, a.n-n, a.n-n);
 end
 
 
@@ -1048,62 +1184,62 @@ end
 The methods for new LDL
 =============================================================#
 function addColumn!(ldl::LDL{Tind, Tval}, ii::Tind)where {Tind,Tval}
-	ldl.col[ldl.perm_idx] = ii;
+    ldl.col[ldl.perm_idx] = ii;
 
-	ldl.colptr_A[ldl.perm_idx] = ldl.current_row_ptr_A;
-	ldl.colptr_B[ldl.perm_idx] = ldl.current_row_ptr_B;
+    ldl.colptr_A[ldl.perm_idx] = ldl.current_row_ptr_A;
+    ldl.colptr_B[ldl.perm_idx] = ldl.current_row_ptr_B;
 end
 
 function addDiag!(ldl::LDL{Tind, Tval}, csum::Tval) where {Tind,Tval}
-	ldl.diagA[ldl.perm_idx] = csum;
-	ldl.perm_idx += 1;
+    ldl.diagA[ldl.perm_idx] = csum;
+    ldl.perm_idx += 1;
 end
 
 function addOffDiag!(ldl::LDL{Tind, Tval}, jj::Tind, val::Tval) where {Tind,Tval}
-	if(jj<=ldl.n)#add to part A
-		push!(ldl.rowval_A, jj);
-		push!(ldl.nzval_A, val);
-		ldl.current_row_ptr_A += 1;
-	else#add to partB
-		push!(ldl.rowval_B, jj-ldl.n);
-		push!(ldl.nzval_B, val);
-		ldl.current_row_ptr_B += 1;
-	end
+    if(jj<=ldl.n)#add to part A
+        push!(ldl.rowval_A, jj);
+        push!(ldl.nzval_A, val);
+        ldl.current_row_ptr_A += 1;
+    else#add to partB
+        push!(ldl.rowval_B, jj-ldl.n);
+        push!(ldl.nzval_B, val);
+        ldl.current_row_ptr_B += 1;
+    end
 end
 
 function finishColumn!(ldl::LDL{Tind, Tval}) where {Tind,Tval}
-	ldl.colptr_A[ldl.n + 1] = ldl.current_row_ptr_A;
-	ldl.colptr_B[ldl.n + 1] = ldl.current_row_ptr_B;
-	#convert raw row index in LA part into permuted index
-	permMap = Array{Tind, 1}(undef, ldl.n)
+    ldl.colptr_A[ldl.n + 1] = ldl.current_row_ptr_A;
+    ldl.colptr_B[ldl.n + 1] = ldl.current_row_ptr_B;
+    #convert raw row index in LA part into permuted index
+    permMap = Array{Tind, 1}(undef, ldl.n)
     @inbounds for ii in 1:ldl.n
-		permMap[ldl.col[ii]] = ii;
-	end
+        permMap[ldl.col[ii]] = ii;
+    end
     @inbounds for ii in 1:(length(ldl.rowval_A))
-		ldl.rowval_A[ii] = permMap[ldl.rowval_A[ii]];
-	end
+        ldl.rowval_A[ii] = permMap[ldl.rowval_A[ii]];
+    end
 end
 
 #re-format LA, LB part as the canonical form of sparse Matrix CSC
 function canonicalForm!(ldl::LDL{Tind, Tval}) where {Tind,Tval}
-	#deal with LA part first
-	@inbounds for ii=1:1:ldl.n
-		rowvals = ldl.rowval_A[ldl.colptr_A[ii]:(ldl.colptr_A[ii+1]-1)];
-		nzvals = ldl.nzval_A[ldl.colptr_A[ii]:(ldl.colptr_A[ii+1]-1)];
-		p = sortperm(rowvals);
-		#write the sorted rowval and nzval
-		ldl.rowval_A[ldl.colptr_A[ii]:(ldl.colptr_A[ii+1]-1)] = rowvals[p];
-		ldl.nzval_A[ldl.colptr_A[ii]:(ldl.colptr_A[ii+1]-1)] = nzvals[p];
-	end
-	#then deal with LB part
-	@inbounds for ii=1:1:ldl.n
-		rowvals = ldl.rowval_B[ldl.colptr_B[ii]:(ldl.colptr_B[ii+1]-1)];
-		nzvals = ldl.nzval_B[ldl.colptr_B[ii]:(ldl.colptr_B[ii+1]-1)];
-		p = sortperm(rowvals);
-		#write the sorted rowval and nzval
-		ldl.rowval_B[ldl.colptr_B[ii]:(ldl.colptr_B[ii+1]-1)] = rowvals[p];
-		ldl.nzval_B[ldl.colptr_B[ii]:(ldl.colptr_B[ii+1]-1)] = nzvals[p];
-	end
+    #deal with LA part first
+    @inbounds for ii=1:1:ldl.n
+        rowvals = ldl.rowval_A[ldl.colptr_A[ii]:(ldl.colptr_A[ii+1]-1)];
+        nzvals = ldl.nzval_A[ldl.colptr_A[ii]:(ldl.colptr_A[ii+1]-1)];
+        p = sortperm(rowvals);
+        #write the sorted rowval and nzval
+        ldl.rowval_A[ldl.colptr_A[ii]:(ldl.colptr_A[ii+1]-1)] = rowvals[p];
+        ldl.nzval_A[ldl.colptr_A[ii]:(ldl.colptr_A[ii+1]-1)] = nzvals[p];
+    end
+    #then deal with LB part
+    @inbounds for ii=1:1:ldl.n
+        rowvals = ldl.rowval_B[ldl.colptr_B[ii]:(ldl.colptr_B[ii+1]-1)];
+        nzvals = ldl.nzval_B[ldl.colptr_B[ii]:(ldl.colptr_B[ii+1]-1)];
+        p = sortperm(rowvals);
+        #write the sorted rowval and nzval
+        ldl.rowval_B[ldl.colptr_B[ii]:(ldl.colptr_B[ii+1]-1)] = rowvals[p];
+        ldl.nzval_B[ldl.colptr_B[ii]:(ldl.colptr_B[ii+1]-1)] = nzvals[p];
+    end
 end
 
 #=============================================================
@@ -1178,130 +1314,130 @@ end
 #forwardSolve API required by Intel Pardiso package
 #calculate b2-B^TA^{-1}b1
 function forwardSolve!(ldl::LDL{Tind, Tval}, y::Vector)where {Tind, Tval}
-	b1 = y[1:ldl.n];
-	b2 = y[(ldl.n+1):(ldl.n+ldl.m)];
-	
-	#now we want to get b2-LB*LA^-1P^Tb1
-	#P^Tb_1
-	permute!(b1, ldl.col);
-	#LA^-1
-	#b1 = LA\b1;
-	invNLA!(ldl, b1);
-	#b2-LB*y
-	#b2 = b2 - LB*b1;
-	b2 = b2-nLB(ldl, b1);
-	#re-assign b2 portion
-	y[(ldl.n+1):(ldl.n+ldl.m)] = b2;
+    b1 = y[1:ldl.n];
+    b2 = y[(ldl.n+1):(ldl.n+ldl.m)];
+    
+    #now we want to get b2-LB*LA^-1P^Tb1
+    #P^Tb_1
+    permute!(b1, ldl.col);
+    #LA^-1
+    #b1 = LA\b1;
+    invNLA!(ldl, b1);
+    #b2-LB*y
+    #b2 = b2 - LB*b1;
+    b2 = b2-nLB(ldl, b1);
+    #re-assign b2 portion
+    y[(ldl.n+1):(ldl.n+ldl.m)] = b2;
 end
 
 #normalized LA solve: nLA x = y
 function invNLA!(ldl::LDL{Tind, Tval}, y::Vector) where {Tind, Tval}
-	@inbounds for i in 1:ldl.n-1
-		@inbounds for j in ldl.colptr_A[i]:(ldl.colptr_A[i+1]-1)
-			y[ldl.rowval_A[j]] = y[ldl.rowval_A[j]] + ldl.nzval_A[j]/ldl.diagA[i]*y[i];
-		end
-	end
+    @inbounds for i in 1:ldl.n-1
+        @inbounds for j in ldl.colptr_A[i]:(ldl.colptr_A[i+1]-1)
+            y[ldl.rowval_A[j]] = y[ldl.rowval_A[j]] + ldl.nzval_A[j]/ldl.diagA[i]*y[i];
+        end
+    end
 end
 
-#normalized LA' solve nLA'^{-1}y		
+#normalized LA' solve nLA'^{-1}y        
 function invNLAT!(ldl::LDL{Tind, Tval}, y::Vector) where {Tind, Tval}
-	@inbounds for i in ldl.n-1:-1:1
-		@inbounds for j in ldl.colptr_A[i]:(ldl.colptr_A[i+1]-1)
-			y[i] = y[i] + ldl.nzval_A[j]/ldl.diagA[i]*y[ldl.rowval_A[j]];
-		end
-	end
+    @inbounds for i in ldl.n-1:-1:1
+        @inbounds for j in ldl.colptr_A[i]:(ldl.colptr_A[i+1]-1)
+            y[i] = y[i] + ldl.nzval_A[j]/ldl.diagA[i]*y[ldl.rowval_A[j]];
+        end
+    end
 end
 
 #matrix vector multiplication nLB*x
 function nLB(ldl::LDL{Tind, Tval}, x::Vector) where {Tind, Tval}
-	y = zeros(Tval, ldl.m);
-	@inbounds for i in 1:1:ldl.n
-		@inbounds for j in ldl.colptr_B[i]:(ldl.colptr_B[i+1]-1)
-			y[ldl.rowval_B[j]] = y[ldl.rowval_B[j]] -ldl.nzval_B[j]/ldl.diagA[i]*x[i];
-		end
-	end
-	return y;
+    y = zeros(Tval, ldl.m);
+    @inbounds for i in 1:1:ldl.n
+        @inbounds for j in ldl.colptr_B[i]:(ldl.colptr_B[i+1]-1)
+            y[ldl.rowval_B[j]] = y[ldl.rowval_B[j]] -ldl.nzval_B[j]/ldl.diagA[i]*x[i];
+        end
+    end
+    return y;
 end
 
 #matrix vector multiplication nLB'*x
 function nLBT(ldl::LDL{Tind, Tval}, x::Vector) where {Tind, Tval}
-	y = zeros(Tval, ldl.n);
-	@inbounds for i in 1:1:ldl.n
-		@inbounds for j in ldl.colptr_B[i]:(ldl.colptr_B[i+1]-1)
-			y[i] = y[i] - ldl.nzval_B[j]/ldl.diagA[i]*x[ldl.rowval_B[j]];
-		end
-	end
-	return y;
+    y = zeros(Tval, ldl.n);
+    @inbounds for i in 1:1:ldl.n
+        @inbounds for j in ldl.colptr_B[i]:(ldl.colptr_B[i+1]-1)
+            y[i] = y[i] - ldl.nzval_B[j]/ldl.diagA[i]*x[ldl.rowval_B[j]];
+        end
+    end
+    return y;
 end
 
 #the function to do y = invD*x
 function invD!(ldl::LDL{Tind, Tval}, x::Vector) where {Tind, Tval}
-	@inbounds for i in 1:1:ldl.n
-		x[i] = x[i]/ldl.diagA[i];
-	end
+    @inbounds for i in 1:1:ldl.n
+        x[i] = x[i]/ldl.diagA[i];
+    end
 end
 
 #backwardSolve API required by Intel Pardiso package
 #calculate b2-B^TA^{-1}b1
 function backwardSolve!(ldl::LDL{Tind, Tval}, y::Vector)where {Tind, Tval}
-	b1 = y[1:ldl.n];
-	b2 = y[(ldl.n+1):(ldl.n+ldl.m)];#this is x2 part
-	
-	#we want to get P*LA^{-T}(invD*LA^{-1}*P^T*b1 - LB^Tb2)
-	#P^T(b_1)
-	permute!(b1, ldl.col);
-	#invD*LA^-1
-	#b1 = invD*(LA\b1);
-	invNLA!(ldl, b1);
-	invD!(ldl, b1);
+    b1 = y[1:ldl.n];
+    b2 = y[(ldl.n+1):(ldl.n+ldl.m)];#this is x2 part
+    
+    #we want to get P*LA^{-T}(invD*LA^{-1}*P^T*b1 - LB^Tb2)
+    #P^T(b_1)
+    permute!(b1, ldl.col);
+    #invD*LA^-1
+    #b1 = invD*(LA\b1);
+    invNLA!(ldl, b1);
+    invD!(ldl, b1);
 
-	#LB^T*b2
-	#b2 = (LB')*b2;	
-	b2 = nLBT(ldl, b2);
-	#b1 = (LA')\(b1-b2);
-	b1 = b1 - b2;
-	invNLAT!(ldl, b1);
-	#P(x)
-	invpermute!(b1, ldl.col);
-	
-	#re-assign b1 portion
-	y[1:ldl.n] = b1;
+    #LB^T*b2
+    #b2 = (LB')*b2; 
+    b2 = nLBT(ldl, b2);
+    #b1 = (LA')\(b1-b2);
+    b1 = b1 - b2;
+    invNLAT!(ldl, b1);
+    #P(x)
+    invpermute!(b1, ldl.col);
+    
+    #re-assign b1 portion
+    y[1:ldl.n] = b1;
 end
 
 function solve!(ldl::LDL{Tind, Tval}, y::Vector, s::SparseMatrixCSC{Tval, Tind})where {Tind, Tval}
-	forwardSolve!(ldl, y);
-	#schur^{-1}
-	S = lap(s)[1:end-1, 1:end-1];
-	if ldl.m>1
-		x2 = [S\y[ldl.n+1:ldl.n+ldl.m-1]; 0];
-	else
-		x2 = [0];
-	end
-	y[(ldl.n+1):(ldl.n+ldl.m)] = x2;
-	backwardSolve!(ldl,y);
+    forwardSolve!(ldl, y);
+    #schur^{-1}
+    S = lap(s)[1:end-1, 1:end-1];
+    if ldl.m>1
+        x2 = [S\y[ldl.n+1:ldl.n+ldl.m-1]; 0];
+    else
+        x2 = [0];
+    end
+    y[(ldl.n+1):(ldl.n+ldl.m)] = x2;
+    backwardSolve!(ldl,y);
 end
 
-#normalized backward solve L'^{-1}y==>L'x = y, as L = nL*sqrt(diag), L'^{-1} = nL^-T*sqrt(1/diag)		
+#normalized backward solve L'^{-1}y==>L'x = y, as L = nL*sqrt(diag), L'^{-1} = nL^-T*sqrt(1/diag)       
 #only allow this when gnd is the only port (m=1)
 function backward!(ldl::LDL{Tind, Tval}, y::Vector) where {Tind, Tval}
-	@assert(ldl.m==1);
-	@assert(length(y) == ldl.n + 1);
-	@inbounds for i in ldl.n-1:-1:1
-		@inbounds for j in ldl.colptr_A[i]:(ldl.colptr_A[i+1]-1)
-			y[i] = y[i] + ldl.nzval_A[j]/ldl.diagA[i]*y[ldl.rowval_A[j]];
-		end
-	end
+    @assert(ldl.m==1);
+    @assert(length(y) == ldl.n + 1);
+    @inbounds for i in ldl.n-1:-1:1
+        @inbounds for j in ldl.colptr_A[i]:(ldl.colptr_A[i+1]-1)
+            y[i] = y[i] + ldl.nzval_A[j]/ldl.diagA[i]*y[ldl.rowval_A[j]];
+        end
+    end
 end
 
 #normalized forward
 function forward!(ldl::LDL{Tind, Tval}, y::Vector) where {Tind, Tval}
-	@assert(ldl.m==1);
-	@assert(length(y) == ldl.n + 1);
-	@inbounds for i in 1:ldl.n-1
-		@inbounds for j in ldl.colptr_A[i]:(ldl.colptr_A[i+1]-1)
-			y[ldl.rowval_A[j]] = y[ldl.rowval_A[j]] + ldl.nzval_A[j]/ldl.diagA[i]*y[i];
-		end
-	end
+    @assert(ldl.m==1);
+    @assert(length(y) == ldl.n + 1);
+    @inbounds for i in 1:ldl.n-1
+        @inbounds for j in ldl.colptr_A[i]:(ldl.colptr_A[i+1]-1)
+            y[ldl.rowval_A[j]] = y[ldl.rowval_A[j]] + ldl.nzval_A[j]/ldl.diagA[i]*y[i];
+        end
+    end
 end
 
 
@@ -1703,120 +1839,120 @@ function condNumber(a, ldli; verbose=false)
 end
 
 function asymSimilarityOp(a, ldl::LDL{Tind, Tval}, schurComplement::SparseMatrixCSC{Tval, Tind}, b::Vector)where {Tind, Tval}
-	y = copy(b);
-	la = lap(a);
-	#the asym op is ldl^-1*la*b
-	y = la*y;
-	solve!(ldl, y, schurComplement);
-	return y;
+    y = copy(b);
+    la = lap(a);
+    #the asym op is ldl^-1*la*b
+    y = la*y;
+    solve!(ldl, y, schurComplement);
+    return y;
 end
 
 function similarityOp(a, ldl::LDL{Tind, Tval}, b::Vector)where {Tind, Tval}
-	y = copy(b);
-	la = lap(a);
+    y = copy(b);
+    la = lap(a);
 
-	@inbounds for ii in 1:length(ldl.diagA)
-		y[ii]=y[ii]/sqrt(ldl.diagA[ii]);
-	end
-	y[ldl.n+1] = 0;
+    @inbounds for ii in 1:length(ldl.diagA)
+        y[ii]=y[ii]/sqrt(ldl.diagA[ii]);
+    end
+    y[ldl.n+1] = 0;
 
-	backward!(ldl, y);
+    backward!(ldl, y);
 
-	invpermute!(y, [ldl.col;ldl.n+1]);
+    invpermute!(y, [ldl.col;ldl.n+1]);
 
-	y = la*y;
+    y = la*y;
 
-	permute!(y,[ldl.col; ldl.n+1])
+    permute!(y,[ldl.col; ldl.n+1])
 
-	forward!(ldl, y);
+    forward!(ldl, y);
 
-	@inbounds for ii in 1:length(ldl.diagA)
-		y[ii]=y[ii]/sqrt(ldl.diagA[ii]);
-	end
-	y[ldl.n+1] = 0;
+    @inbounds for ii in 1:length(ldl.diagA)
+        y[ii]=y[ii]/sqrt(ldl.diagA[ii]);
+    end
+    y[ldl.n+1] = 0;
 
-	return y;
+    return y;
 end
 
 """
 condition number for given LDL format with only 1 port
 """
 function condNumber(a, ldl::LDL{Tind, Tval}; verbose=false)where {Tind, Tval}
-	@assert(ldl.m==1)
-	@assert(ldl.n+1==size(a,1))
-	la = lap(a)
-	# construct the square operator
-	g = function(b)
-		y = copy(b);
+    @assert(ldl.m==1)
+    @assert(ldl.n+1==size(a,1))
+    la = lap(a)
+    # construct the square operator
+    g = function(b)
+        y = copy(b);
 
-		#P*L*L'*P'\approx la
-		#the linear operator is (P*L)^{-1}*la*(L'*P')^{-1}=L^-1*P'*la*P*L'^-1
-		#solve L'^{-1}y==>L'x = y, as L = nL*sqrt(diag), L'^{-1} = nL^-T*sqrt(1/diag)		
-		#overall: sqrt(1/diag)*nL^{-1}*P'*la*P*nL{-T}*sqrt{1/diag}
-		#scale by sqrt(diag)
-		@inbounds for ii in 1:length(ldl.diagA)
-			y[ii]=y[ii]/sqrt(ldl.diagA[ii]);
-		end
-		y[ldl.n+1] = 0;
+        #P*L*L'*P'\approx la
+        #the linear operator is (P*L)^{-1}*la*(L'*P')^{-1}=L^-1*P'*la*P*L'^-1
+        #solve L'^{-1}y==>L'x = y, as L = nL*sqrt(diag), L'^{-1} = nL^-T*sqrt(1/diag)       
+        #overall: sqrt(1/diag)*nL^{-1}*P'*la*P*nL{-T}*sqrt{1/diag}
+        #scale by sqrt(diag)
+        @inbounds for ii in 1:length(ldl.diagA)
+            y[ii]=y[ii]/sqrt(ldl.diagA[ii]);
+        end
+        y[ldl.n+1] = 0;
 
-		backward!(ldl, y);
-		#P correspond to invpermute with ldl.col
-		invpermute!(y, [ldl.col;ldl.n+1]);
+        backward!(ldl, y);
+        #P correspond to invpermute with ldl.col
+        invpermute!(y, [ldl.col;ldl.n+1]);
 
-		y = la*y;
-		#P^T correspond to permute with ldl.col
-		permute!(y,[ldl.col; ldl.n+1])
+        y = la*y;
+        #P^T correspond to permute with ldl.col
+        permute!(y,[ldl.col; ldl.n+1])
 
-		forward!(ldl, y);
+        forward!(ldl, y);
 
-		@inbounds for ii in 1:length(ldl.diagA)
-			y[ii]=y[ii]/sqrt(ldl.diagA[ii]);
-		end
-		y[ldl.n+1] = 0;
+        @inbounds for ii in 1:length(ldl.diagA)
+            y[ii]=y[ii]/sqrt(ldl.diagA[ii]);
+        end
+        y[ldl.n+1] = 0;
 
-		return y
-	end
-	gOp = SqLinOp(true,1.0,size(a,1),g)
-	upper = eigs(gOp;nev=1,which=:LM,tol=1e-2)[1][1]
-	
-	g2(b) = upper*b - g(b)
-	g2Op = SqLinOp(true,1.0,size(a,1),g2)
-	lower = upper - eigs(g2Op;nev=2,which=:LM,tol=1e-2)[1][2]
-	
-	if verbose
-		println("lower: ", lower, ", upper: ", upper);
-	end
-	
-	return upper/lower
+        return y
+    end
+    gOp = SqLinOp(true,1.0,size(a,1),g)
+    upper = eigs(gOp;nev=1,which=:LM,tol=1e-2)[1][1]
+    
+    g2(b) = upper*b - g(b)
+    g2Op = SqLinOp(true,1.0,size(a,1),g2)
+    lower = upper - eigs(g2Op;nev=2,which=:LM,tol=1e-2)[1][2]
+    
+    if verbose
+        println("lower: ", lower, ", upper: ", upper);
+    end
+    
+    return upper/lower
 end
 
 """
 condition number for given LDL and schur complement
 """
 function condNumber(a, ldl::LDL{Tind, Tval}, schurC::SparseMatrixCSC{Tval, Tind}; verbose=false)where {Tind, Tval}
-	@assert((ldl.n+ldl.m)==size(a,1))
-	canonicalForm!(ldl);
-	la = lap(a)
-	# construct the square operator
-	g = function(b)
-		y = copy(b);
-		#the asym op is ldl^-1*la*b
-		y = la*y;
-		solve!(ldl, y, schurC);
-		return y
-	end
-	gOp = SqLinOp(false,1.0,size(a,1),g)
-	upper = eigs(gOp;nev=1,which=:LM,tol=1e-2)[1][1]
-	
-	g2(b) = upper*b - g(b)
-	g2Op = SqLinOp(false,1.0,size(a,1),g2)
-	lower = upper - eigs(g2Op;nev=2,which=:LM,tol=1e-2)[1][2]
-	
-	if verbose
-		println("lower: ", lower, ", upper: ", upper);
-	end
-	
-	return upper/lower
+    @assert((ldl.n+ldl.m)==size(a,1))
+    canonicalForm!(ldl);
+    la = lap(a)
+    # construct the square operator
+    g = function(b)
+        y = copy(b);
+        #the asym op is ldl^-1*la*b
+        y = la*y;
+        solve!(ldl, y, schurC);
+        return y
+    end
+    gOp = SqLinOp(false,1.0,size(a,1),g)
+    upper = eigs(gOp;nev=1,which=:LM,tol=1e-2)[1][1]
+    
+    g2(b) = upper*b - g(b)
+    g2Op = SqLinOp(false,1.0,size(a,1),g2)
+    lower = upper - eigs(g2Op;nev=2,which=:LM,tol=1e-2)[1][2]
+    
+    if verbose
+        println("lower: ", lower, ", upper: ", upper);
+    end
+    
+    return upper/lower
 end
 
 #forwardSolve with multi partitions, used in partitioned version of solve!
@@ -1898,21 +2034,21 @@ function solve!(ldls::Array{LDL{Tind, Tval}, 1},
                 portVecs::Array{Array{Tind,1}, 1}, 
                 numInternalNode::Tind, 
                 numPort::Tind)where {Tind, Tval}
-	forwardSolve!(ldls, y, numInternalNodes, indexOffsets, portVecs, numInternalNode, numPort);
+    forwardSolve!(ldls, y, numInternalNodes, indexOffsets, portVecs, numInternalNode, numPort);
     #check number of internal nodes
     @assert((numInternalNode + numPort) == size(y, 1));
-	#schur^{-1}
+    #schur^{-1}
     #check schur laplacian size
     @assert(size(ls,1)==numPort);
-	S = ls[1:end-1, 1:end-1];
-	if numPort>1
-		x2 = [S\y[numInternalNode+1:numInternalNode + numPort-1]; 0];
-	else
-		x2 = [0];
-	end
-	y[numInternalNode+1:numInternalNode + numPort] = x2;
+    S = ls[1:end-1, 1:end-1];
+    if numPort>1
+        x2 = [S\y[numInternalNode+1:numInternalNode + numPort-1]; 0];
+    else
+        x2 = [0];
+    end
+    y[numInternalNode+1:numInternalNode + numPort] = x2;
 
-	backwardSolve!(ldls, y, numInternalNodes, indexOffsets, portVecs, numInternalNode, numPort);
+    backwardSolve!(ldls, y, numInternalNodes, indexOffsets, portVecs, numInternalNode, numPort);
     return y;
 end
 
@@ -2061,28 +2197,28 @@ function condNumber(adjGraphs::Array{SparseMatrixCSC{Tval, Tind}, 1}, #adj graph
 
     #create the square linear operation
     g = function(b)
-		y = copy(b);
+        y = copy(b);
         #first do the matrix vector multiplication but with many partitions
         y = LaplacianVectorMult!(las, y, numInternalNodes, indexOffsets, portVecs, numInternalNode, numPort);
         #then do the forward solve with given factorization results
-		solve!(ldls, y, ls, numInternalNodes, indexOffsets, portVecs, numInternalNode, numPort);
+        solve!(ldls, y, ls, numInternalNodes, indexOffsets, portVecs, numInternalNode, numPort);
         return y;
     end
 
     #total number of node is sum of internal nodes + port nodes
     numNode  = numInternalNode + numPort;
-	gOp = SqLinOp(false,1.0,numNode,g)
-	upper = eigs(gOp;nev=1,which=:LM,tol=1e-2)[1][1]
-	
-	g2(b) = upper*b - g(b)
-	g2Op = SqLinOp(false,1.0,numNode,g2)
-	lower = upper - eigs(g2Op;nev=2,which=:LM,tol=1e-2)[1][2]
-	
-	if verbose
-		println("lower: ", lower, ", upper: ", upper);
-	end
-	
-	return upper/lower
+    gOp = SqLinOp(false,1.0,numNode,g)
+    upper = eigs(gOp;nev=1,which=:LM,tol=1e-2)[1][1]
+    
+    g2(b) = upper*b - g(b)
+    g2Op = SqLinOp(false,1.0,numNode,g2)
+    lower = upper - eigs(g2Op;nev=2,which=:LM,tol=1e-2)[1][2]
+    
+    if verbose
+        println("lower: ", lower, ", upper: ", upper);
+    end
+    
+    return upper/lower
 end
 #===========================================
 
@@ -2304,16 +2440,16 @@ end
 
 #the function to print an entire priority queue
 function PrintApproxCholPQ(pq::ApproxCholPQ{Tind}) where Tind
-	println("minlist: $(pq.minlist), nitems: $(pq.nitems), n: $(pq.n)");
-	for i in 1:2*pq.n+1
-		print("list of deg $(i): ")
-		ptr = pq.lists[i]
-		while ptr>zero(Tind)
-			print("$(ptr)->")
-			ptr = pq.elems[ptr].next;
-		end
-		println("")
-	end
+    println("minlist: $(pq.minlist), nitems: $(pq.nitems), n: $(pq.n)");
+    for i in 1:2*pq.n+1
+        print("list of deg $(i): ")
+        ptr = pq.lists[i]
+        while ptr>zero(Tind)
+            print("$(ptr)->")
+            ptr = pq.elems[ptr].next;
+        end
+        println("")
+    end
 end
 
 
@@ -2350,10 +2486,10 @@ end
     This could crash if i exceeds the maxkey
 """
 function approxCholPQDec!(pq::ApproxCholPQ{Tind}, i) where Tind
-	
-	if(i>=pq.n)
-		return nothing;
-	end
+    
+    if(i>=pq.n)
+        return nothing;
+    end
     oldlist = keyMap(pq.elems[i].key, pq.n)
     newlist = keyMap(pq.elems[i].key - one(Tind), pq.n)
 
@@ -2379,9 +2515,9 @@ end
 """
 function approxCholPQInc!(pq::ApproxCholPQ{Tind}, i) where Tind
 
-	if(i>=pq.n)
-		return nothing;
-	end
+    if(i>=pq.n)
+        return nothing;
+    end
 
     oldlist = keyMap(pq.elems[i].key, pq.n)
     newlist = keyMap(pq.elems[i].key + one(Tind), pq.n)
