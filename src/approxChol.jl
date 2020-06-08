@@ -74,7 +74,8 @@ function LLmatp(a::SparseMatrixCSC{Tval,Tind}) where {Tind,Tval}
 
     @inbounds for i in 1:n
         degs[i] = a.colptr[i+1] - a.colptr[i]
-
+        if degs[i]==0
+            continue;
         ind = a.colptr[i]
         j = a.rowval[ind]
         v = a.nzval[ind]
@@ -89,6 +90,8 @@ function LLmatp(a::SparseMatrixCSC{Tval,Tind}) where {Tind,Tval}
     end
 
     @inbounds for i in 1:n
+        if degs[i]==0
+            continue;
         for ind in a.colptr[i]:(a.colptr[i+1]-one(Tind))
             llelems[ind].reverse = llelems[flips[ind]]
         end
