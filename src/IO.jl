@@ -27,6 +27,9 @@ Vertex indices start at `1`.
 
 Input matrix is only upper or lower triangular part of the graph adj matrix
 """
+
+Eps = 1e-12;
+
 function read_graph(fn::AbstractString)
 
     # first, detect the delimiter type
@@ -119,8 +122,8 @@ function tesla_to_graph(fn::AbstractString, nTesla::Tind) where Tind
 	n = size(A, 1) + 1;
 	#sum up rows of A to get the connection to the gnd node (reference node)
 	hidden_wt = sum(A, dims=1);
-	#set the threshold to 10^-9 for meaningful conductance
-	hidden_wt[hidden_wt.<10^-9].=0;
+	#set the threshold to very small condutance for meaningful conductance
+	hidden_wt[hidden_wt.<Eps].=0;
 	hidden_wt = sparse(hidden_wt);
 	(hi, hj, hv) = findnz(hidden_wt);
 	(ai, aj, av) = findnz(tril(A, -1));
@@ -150,8 +153,8 @@ function matrix_market_to_graph(fn::AbstractString)
 	n = size(A, 1) + 1;
 	#sum up rows of A to get the connection to the gnd node (reference node)
 	hidden_wt = sum(A, dims=1);
-	#set the threshold to 10^-9 for meaningful conductance
-	hidden_wt[hidden_wt.<10^-9].=0;
+	#set the threshold to epsilon for meaningful conductance
+	hidden_wt[hidden_wt.<Eps].=0;
 	hidden_wt = sparse(hidden_wt);
 	(hi, hj, hv) = findnz(hidden_wt);
 	(ai, aj, av) = findnz(tril(A, -1));

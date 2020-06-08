@@ -76,6 +76,7 @@ function LLmatp(a::SparseMatrixCSC{Tval,Tind}) where {Tind,Tval}
         degs[i] = a.colptr[i+1] - a.colptr[i]
         if degs[i]==0
             continue;
+        end
         ind = a.colptr[i]
         j = a.rowval[ind]
         v = a.nzval[ind]
@@ -92,6 +93,7 @@ function LLmatp(a::SparseMatrixCSC{Tval,Tind}) where {Tind,Tval}
     @inbounds for i in 1:n
         if degs[i]==0
             continue;
+        end
         for ind in a.colptr[i]:(a.colptr[i+1]-one(Tind))
             llelems[ind].reverse = llelems[flips[ind]]
         end
@@ -1167,6 +1169,9 @@ function schurComplement!(a::LLmatp{Tind,Tval}, n::Tind) where {Tind, Tval}
     colspace = Array{LLp{Tind,Tval}}(undef, a.n)
 
     @inbounds for ii in n+1:1:a.n
+        if a.degs[ii]==0
+            continue
+        end
         len = get_ll_col(a, ii, colspace)
         len = compressCol!(a, colspace, len)  #3hog
         @inbounds for jj in 1:1:len
@@ -1841,94 +1846,6 @@ function condNumber(a, ldli; verbose=false)
 
 end
 
-function asymSimilarityOp(a, ldl::LDL{Tind, Tval}, schurComplement::SparseMatrixCSC{Tval, Tind}, b::Vector)where {Tind, Tval}
-    y = copy(b);
-    la = lap(a);
-    #the asym op is ldl^-1*la*b
-    y = la*y;
-    solve!(ldl, y, schurComplement);
-    return y;
-end
-
-function similarityOp(a, ldl::LDL{Tind, Tval}, b::Vector)where {Tind, Tval}
-    y = copy(b);
-    la = lap(a);
-
-    @inbounds for ii in 1:length(ldl.diagA)
-        y[ii]=y[ii]/sqrt(ldl.diagA[ii]);
-    end
-    y[ldl.n+1] = 0;
-
-    backward!(ldl, y);
-
-    invpermute!(y, [ldl.col;ldl.n+1]);
-
-    y = la*y;
-
-    permute!(y,[ldl.col; ldl.n+1])
-
-    forward!(ldl, y);
-
-    @inbounds for ii in 1:length(ldl.diagA)
-        y[ii]=y[ii]/sqrt(ldl.diagA[ii]);
-    end
-    y[ldl.n+1] = 0;
-
-    return y;
-end
-
-"""
-condition number for given LDL format with only 1 port
-"""
-function condNumber(a, ldl::LDL{Tind, Tval}; verbose=false)where {Tind, Tval}
-    @assert(ldl.m==1)
-    @assert(ldl.n+1==size(a,1))
-    la = lap(a)
-    # construct the square operator
-    g = function(b)
-        y = copy(b);
-
-        #P*L*L'*P'\approx la
-        #the linear operator is (P*L)^{-1}*la*(L'*P')^{-1}=L^-1*P'*la*P*L'^-1
-        #solve L'^{-1}y==>L'x = y, as L = nL*sqrt(diag), L'^{-1} = nL^-T*sqrt(1/diag)       
-        #overall: sqrt(1/diag)*nL^{-1}*P'*la*P*nL{-T}*sqrt{1/diag}
-        #scale by sqrt(diag)
-        @inbounds for ii in 1:length(ldl.diagA)
-            y[ii]=y[ii]/sqrt(ldl.diagA[ii]);
-        end
-        y[ldl.n+1] = 0;
-
-        backward!(ldl, y);
-        #P correspond to invpermute with ldl.col
-        invpermute!(y, [ldl.col;ldl.n+1]);
-
-        y = la*y;
-        #P^T correspond to permute with ldl.col
-        permute!(y,[ldl.col; ldl.n+1])
-
-        forward!(ldl, y);
-
-        @inbounds for ii in 1:length(ldl.diagA)
-            y[ii]=y[ii]/sqrt(ldl.diagA[ii]);
-        end
-        y[ldl.n+1] = 0;
-
-        return y
-    end
-    gOp = SqLinOp(true,1.0,size(a,1),g)
-    upper = eigs(gOp;nev=1,which=:LM,tol=1e-2)[1][1]
-    
-    g2(b) = upper*b - g(b)
-    g2Op = SqLinOp(true,1.0,size(a,1),g2)
-    lower = upper - eigs(g2Op;nev=2,which=:LM,tol=1e-2)[1][2]
-    
-    if verbose
-        println("lower: ", lower, ", upper: ", upper);
-    end
-    
-    return upper/lower
-end
-
 """
 condition number for given LDL and schur complement
 """
@@ -1949,6 +1866,52 @@ function condNumber(a, ldl::LDL{Tind, Tval}, schurC::SparseMatrixCSC{Tval, Tind}
     
     g2(b) = upper*b - g(b)
     g2Op = SqLinOp(false,1.0,size(a,1),g2)
+    lower = upper - eigs(g2Op;nev=2,which=:LM,tol=1e-2)[1][2]
+    
+    if verbose
+        println("lower: ", lower, ", upper: ", upper);
+    end
+    
+    return upper/lower
+end
+
+"""
+condition number for given LDL and schur complement in the symmetric form
+symmetric form will be more stable
+"""
+function condNumberSym(a, ldl::LDL{Tind, Tval}, schurC::SparseMatrixCSC{Tval, Tind}; verbose=false)where {Tind, Tval}
+    @assert((ldl.n+ldl.m)==size(a,1))
+    canonicalForm!(ldl);
+    la = lap(a)
+    F = LinearAlgebra.cholesky(Laplacians.lap(schurC)[1:end-1, 1:end-1]);
+    #construct the square operator 
+    g = function(b)
+        y = copy(b);
+        if ldl.m >1
+            x2 = [F.UP\y[ldl.n+1:ldl.n+ldl.m-1]; 0];
+        else
+            x2 = [0];
+        end
+        y[(ldl.n+1):(ldl.n+ldl.m)] = x2;
+
+        backwardSolve!(ldl, y);
+        y = la*y;
+        forwardSolve!(ldl, y);
+
+        if ldl.m >1
+            x2 = [F.PtL\y[ldl.n+1:ldl.n+ldl.m-1]; 0];
+        else
+            x2 = [0];
+        end
+        y[(ldl.n+1):(ldl.n+ldl.m)] = x2;
+
+        return y
+    end
+    gOp = SqLinOp(true,1.0,size(a,1),g)
+    upper = eigs(gOp;nev=1,which=:LM,tol=1e-2)[1][1]
+    
+    g2(b) = upper*b - g(b)
+    g2Op = SqLinOp(true,1.0,size(a,1),g2)
     lower = upper - eigs(g2Op;nev=2,which=:LM,tol=1e-2)[1][2]
     
     if verbose
