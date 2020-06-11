@@ -273,7 +273,7 @@ function compressCol!(a::LLmatp{Tind,Tval},
   len::Int;
   forSchurC=true) where {Tind,Tval}
 
-    o = Base.Order.ord(isless, x->x.row, false, Base.Order.Forward)
+    o = Base.Order.ord((x, y)->(x[1]<y[1]||(x[1]==y[1]&&x[2]<y[2])), x->(x.row, x.val), false, Base.Order.Forward)
 
     sort!(colspace, 1, len, QuickSort, o)
 
@@ -1423,29 +1423,6 @@ function solve!(ldl::LDL{Tind, Tval}, y::Vector, s::SparseMatrixCSC{Tval, Tind})
     end
     y[(ldl.n+1):(ldl.n+ldl.m)] = x2;
     backwardSolve!(ldl,y);
-end
-
-#normalized backward solve L'^{-1}y==>L'x = y, as L = nL*sqrt(diag), L'^{-1} = nL^-T*sqrt(1/diag)       
-#only allow this when gnd is the only port (m=1)
-function backward!(ldl::LDL{Tind, Tval}, y::Vector) where {Tind, Tval}
-    @assert(ldl.m==1);
-    @assert(length(y) == ldl.n + 1);
-    @inbounds for i in ldl.n-1:-1:1
-        @inbounds for j in ldl.colptr_A[i]:(ldl.colptr_A[i+1]-1)
-            y[i] = y[i] + ldl.nzval_A[j]/ldl.diagA[i]*y[ldl.rowval_A[j]];
-        end
-    end
-end
-
-#normalized forward
-function forward!(ldl::LDL{Tind, Tval}, y::Vector) where {Tind, Tval}
-    @assert(ldl.m==1);
-    @assert(length(y) == ldl.n + 1);
-    @inbounds for i in 1:ldl.n-1
-        @inbounds for j in ldl.colptr_A[i]:(ldl.colptr_A[i+1]-1)
-            y[ldl.rowval_A[j]] = y[ldl.rowval_A[j]] + ldl.nzval_A[j]/ldl.diagA[i]*y[i];
-        end
-    end
 end
 
 
