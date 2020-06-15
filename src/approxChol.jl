@@ -1853,6 +1853,123 @@ function condNumber(a, ldl::LDL{Tind, Tval}, schurC::SparseMatrixCSC{Tval, Tind}
 end
 
 """
+get the true factor: [LA, 0
+                      LB, I] 
+"""
+function getL(ldl::LDL{Tind, Tval})where {Tind, Tval}
+    #make sure that ldl is already in its canonical form
+    canonicalForm!(ldl);
+    nLA = SparseArrays.SparseMatrixCSC{Tval, Tind}(ldl.n, ldl.n, ldl.colptr_A, ldl.rowval_A, ldl.nzval_A);
+    nLB = SparseArrays.SparseMatrixCSC{Tval, Tind}(ldl.m, ldl.n, ldl.colptr_B, ldl.rowval_B, ldl.nzval_B);
+    nL = [nLA; nLB];
+    #normalize to get tru nL
+    for ii=1:1:nL.n
+        for jj=nL.colptr[ii]:1:(nL.colptr[ii+1] - 1)
+            nL.nzval[jj] = nL.nzval[jj]/sqrt(ldl.diagA[ii]);
+        end
+    end
+    nL = SparseArrays.sparse(1:ldl.n, 1:ldl.n, sqrt.(ldl.diagA), ldl.m + ldl.n, ldl.n) - nL;
+    I = SparseArrays.sparse(1:ldl.m, 1:ldl.m, ones(ldl.m));
+    E = SparseArrays.sparse(Tind[], Tind[], Tval[], ldl.n, ldl.m);
+    L = hcat(nL, [E;I]);
+end
+
+"""
+Support from LDL, schurC to original graph adj matrix: max eig of la^-1*L*L^T
+The asymmetric version is not stable, please use the symmetric version
+"""
+function support_asym(a, ldl::LDL{Tind, Tval}, schurC::SparseMatrixCSC{Tval, Tind}; verbose=false)where {Tind, Tval}
+    #check problem dim
+    @assert((ldl.n+ldl.m)==size(a,1))
+    #make ldl to be the canonical form
+    #getL function below already has canonicalForm enforced.
+    #canonicalForm!(ldl);
+    L = getL(ldl);
+    lc = Laplacians.lap(schurC);
+    #the solver for la
+    f = Laplacians.approxchol_lap(a, tol=1e-5);
+    #define the linear operation for max eigs
+    g = function(b)
+        y = copy(b);
+        #perform PT
+        x1 = y[1:ldl.n];
+        permute!(x1, ldl.col);
+        y[1:ldl.n] = x1;
+
+        #perform L^T*y
+        y = L'*y;
+
+        #perform Schur Complement multiplication
+        y[ldl.n+1:end] = lc*y[ldl.n+1:end];
+
+        #perform L*y
+        y = L*y;
+
+        #perform P y
+        x1 = y[1:ldl.n];
+        invpermute!(x1, ldl.col);
+        y[1:ldl.n] = x1;
+
+        return f(y);
+    end
+    op = SqLinOp(false,1.0,size(a,1),g)
+    return abs(eigs(op;nev=1,which=:LM,tol=1e-2)[1][1]);
+end
+
+"""
+Calculate the support function using the symmetric operand
+"""
+function support(a, ldl::LDL{Tind, Tval}, schurC::SparseMatrixCSC{Tval, Tind}; verbose=false)where {Tind, Tval}
+    #check problem dim
+    @assert((ldl.n+ldl.m)==size(a,1))
+    #canonical form will be enforced by getL
+    #canonicalForm!(ldl);
+    L = getL(ldl);
+    
+    #get the factorization form of lap(schurC)
+    F = LinearAlgebra.cholesky(Laplacians.lap(schurC)[1:end-1, 1:end-1]);
+    Lc = SparseArrays.sparse(F.L)[invperm(F.p),:];
+    LAug = [Lc; -sum(Lc, dims=1)];
+    #Laplacian solver
+    f = Laplacians.approxchol_lap(a, tol=1e-5);
+    #define the symmetric linear function
+    g = function(b)
+        y = copy(b);
+
+        #perform Lc*y
+        x2 = y[ldl.n+1:end-1];
+        y[ldl.n+1:end] = LAug*x2;
+
+        #perform L*y
+        y = L*y;
+
+        #perform P*y
+        x1 = y[1:ldl.n];
+        invpermute!(x1, ldl.col);
+        y[1:ldl.n] = x1;
+
+        #perform A^-1
+        y = f(y);
+
+        #perform P^T y
+        x1 = y[1:ldl.n];
+        permute!(x1, ldl.col);
+        y[1:ldl.n] = x1;
+
+        #perform L^T*y
+        y = L'*y;
+
+        #perform Lc^T*y
+        x2 = y[ldl.n+1:end];
+        y[ldl.n+1:end] = [LAug'*x2; 0];
+        
+        return y;
+    end
+    op = SqLinOp(true,1.0,size(a,1),g)
+    return eigs(op;nev=1,which=:LM,tol=1e-2)[1][1];
+end
+
+"""
 condition number for given LDL and schur complement in the symmetric form
 symmetric form will be more stable
 """
