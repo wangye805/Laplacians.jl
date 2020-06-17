@@ -59,7 +59,7 @@ LDLinv(a::LLMatOrd{Tind,Tval}) where {Tind,Tval} =
 LDLinv(a::LLmatp{Tind,Tval}) where {Tind,Tval} =
   LDLinv(zeros(Tind,a.n-1), zeros(Tind,a.n),Tind[],Tval[],zeros(Tval,a.n))
 
-LDL(a::LLmatp{Tind,Tval}, np::Tind) where {Tind,Tval} = LDL(a.n-np, np, 1, zeros(Tind, a.n-np), 1, zeros(Tind, a.n-np+1), Tind[], Tval[], 1, zeros(Tind, a.n-np+1), Tind[], Tval[], zeros(Tval, a.n-np));
+LDL(a::LLmatp{Tind,Tval}, np::Tind) where {Tind,Tval} = LDL(a.n-np, np, 1, Tind[], 1, Tind[], Tind[], Tval[], 1, Tind[], Tind[], Tval[], Tval[]);
 
 function LLmatp(a::SparseMatrixCSC{Tval,Tind}) where {Tind,Tval}
     n = size(a,1)
@@ -728,6 +728,120 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind, order::Array{Tind, 1}, P
     return ldl, schurComplement!(a, n), debugInfo
 end
 
+#the approximate cholesy with early stop
+#nReduce is the actual node to be reduced
+function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind, numAddPorts::Tind) where {Tind,Tval}
+    #dim of the original graph
+    nGraph = a.n
+    #num of nodes pushed into priority queue
+    n = a.n - nPorts
+    
+    #initialize an empty LDL
+    ldl = LDL(a, nPorts)
+    
+    #now only feed in first n degs
+    pq = ApproxCholPQ(a.degs, n)
+
+    colspace = Array{LLp{Tind,Tval}}(undef, nGraph)
+    cumspace = Array{Tval}(undef, nGraph)
+    vals = Array{Tval}(undef, nGraph) # will be able to delete this
+
+    o = Base.Order.ord(isless, identity, false, Base.Order.Forward)
+
+    it = 1
+    nReduce = nGraph - nPorts - numAddPorts;
+    @inbounds while it <= nReduce
+        i = approxCholPQPop!(pq)
+        addColumn!(ldl, i);
+
+        it = it + 1
+
+        len = get_ll_col(a, i, colspace)
+
+        len = compressCol!(a, colspace, len, pq)  #3hog
+
+        csum = zero(Tval)
+        for ii in 1:len
+            vals[ii] = colspace[ii].val
+            csum = csum + colspace[ii].val
+            cumspace[ii] = csum
+        end
+        wdeg = csum
+
+        #add the diagonal element
+        addDiag!(ldl, csum)
+
+        colScale = one(Tval)
+        
+        for joffset in 1:(len-1)
+
+            ll = colspace[joffset]
+            w = vals[joffset] * colScale
+            j = ll.row
+            revj = ll.reverse
+
+            f = w/(wdeg)
+
+            addOffDiag!(ldl, j, vals[joffset])
+
+            vals[joffset] = zero(Tval)
+            randVal = rand();
+
+            r = randVal * (csum - cumspace[joffset]) + cumspace[joffset]
+            koff = searchsortedfirst(cumspace,r,one(len),len,o)
+
+            k = colspace[koff].row
+            #println("k is $(k)");
+            approxCholPQInc!(pq, k)
+
+            newEdgeVal = f*(one(Tval)-f)*wdeg
+            #println("newEdgeVal is $(newEdgeVal)");
+
+            # fix row k in col j
+            revj.row = k   # dense time hog: presumably becaus of cache
+            revj.val = newEdgeVal
+            revj.reverse = ll
+
+            # fix row j in col k
+            khead = a.cols[k]
+            a.cols[k] = ll
+            ll.next = khead
+            ll.reverse = revj
+            ll.val = newEdgeVal
+            ll.row = j
+
+            colScale = colScale*(one(Tval)-f)
+            wdeg = wdeg*(one(Tval)-f)^2
+            
+        end # for
+
+        ll = colspace[len]
+        w = vals[len] * colScale
+        j = ll.row
+        revj = ll.reverse
+
+        #println("deal with last node $(j) in col $(i)");
+
+        addOffDiag!(ldl,j, vals[len]);
+        revj.val = zero(Tval)
+    end
+    #pop all unReduced nodes as ports
+    while it<=n
+        i = approxCholPQPop!(pq);
+        addPort!(ldl, i);
+        it+=1;
+    end
+    finishColumn!(ldl);
+    reform!(ldl);
+    println("Finish reform");
+    P = [ldl.col;n+1:a.n];
+    schurC = schurComplement!(a, nReduce, numAddPorts, ldl.col);
+    #make ldl.col 1:ldl.n
+    ldl.col = collect(1:ldl.n);
+    return ldl, schurC, P
+end
+
+
 #the approximate cholesky with parameter of number of ports (>=1)
 #add the debug knob to print debugging info
 function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind; debug = false) where {Tind,Tval}
@@ -1187,19 +1301,58 @@ function schurComplement!(a::LLmatp{Tind,Tval}, n::Tind) where {Tind, Tval}
     return sparse(I, J, V, a.n-n, a.n-n);
 end
 
+#=============================================================
+The function to get the remaining schur complement from linked list matrix from the early stop mode
+=============================================================#
+function schurComplement!(a::LLmatp{Tind,Tval}, n::Tind, numAddPorts::Tind, permVec::Array{Tind, 1}) where {Tind, Tval}
+    #construct the perm mapping from permVec
+    permMap = Array{Tind, 1}(undef, a.n);
+    for ii=1:1:a.n
+        if(ii<=size(permVec,1))
+            permMap[permVec[ii]] = ii;
+        else
+            permMap[ii] = ii;
+        end
+    end
+    I = Tind[];
+    J = Tind[];
+    V = Tval[];
+    #prepare for loading each column
+    colspace = Array{LLp{Tind,Tval}}(undef, a.n)
+
+    @inbounds for ii in n+1:1:a.n
+        if a.degs[ii]==0
+            continue
+        end
+        if(ii<=size(permVec,1))
+            len = get_ll_col(a, permVec[ii], colspace)
+        else
+            len = get_ll_col(a, ii, colspace)
+        end
+        len = compressCol!(a, colspace, len)  #3hog
+        @inbounds for jj in 1:1:len
+            push!(I, permMap[colspace[jj].row] - n);
+            push!(J, ii - n);
+            push!(V, colspace[jj].val);
+        end
+    end
+    return sparse(I, J, V, a.n-n, a.n-n);
+end
+
+
 
 #=============================================================
 The methods for new LDL
 =============================================================#
 function addColumn!(ldl::LDL{Tind, Tval}, ii::Tind)where {Tind,Tval}
-    ldl.col[ldl.perm_idx] = ii;
+    push!(ldl.col, ii);
 
-    ldl.colptr_A[ldl.perm_idx] = ldl.current_row_ptr_A;
-    ldl.colptr_B[ldl.perm_idx] = ldl.current_row_ptr_B;
+    push!(ldl.colptr_A, ldl.current_row_ptr_A);
+    push!(ldl.colptr_B, ldl.current_row_ptr_B);
 end
 
 function addDiag!(ldl::LDL{Tind, Tval}, csum::Tval) where {Tind,Tval}
-    ldl.diagA[ldl.perm_idx] = csum;
+    push!(ldl.diagA, csum);
     ldl.perm_idx += 1;
 end
 
@@ -1216,9 +1369,10 @@ function addOffDiag!(ldl::LDL{Tind, Tval}, jj::Tind, val::Tval) where {Tind,Tval
 end
 
 function finishColumn!(ldl::LDL{Tind, Tval}) where {Tind,Tval}
-    ldl.colptr_A[ldl.n + 1] = ldl.current_row_ptr_A;
-    ldl.colptr_B[ldl.n + 1] = ldl.current_row_ptr_B;
+    push!(ldl.colptr_A, ldl.current_row_ptr_A);
+    push!(ldl.colptr_B, ldl.current_row_ptr_B);
     #convert raw row index in LA part into permuted index
+    #ldl.col is always of size ldl.n even if in early stop
     permMap = Array{Tind, 1}(undef, ldl.n)
     @inbounds for ii in 1:ldl.n
         permMap[ldl.col[ii]] = ii;
@@ -1231,7 +1385,7 @@ end
 #re-format LA, LB part as the canonical form of sparse Matrix CSC
 function canonicalForm!(ldl::LDL{Tind, Tval}) where {Tind,Tval}
     #deal with LA part first
-    @inbounds for ii=1:1:ldl.n
+    @inbounds for ii=1:1:(size(ldl.colptr_A,1)-1)
         rowvals = ldl.rowval_A[ldl.colptr_A[ii]:(ldl.colptr_A[ii+1]-1)];
         nzvals = ldl.nzval_A[ldl.colptr_A[ii]:(ldl.colptr_A[ii+1]-1)];
         p = sortperm(rowvals);
@@ -1240,7 +1394,7 @@ function canonicalForm!(ldl::LDL{Tind, Tval}) where {Tind,Tval}
         ldl.nzval_A[ldl.colptr_A[ii]:(ldl.colptr_A[ii+1]-1)] = nzvals[p];
     end
     #then deal with LB part
-    @inbounds for ii=1:1:ldl.n
+    @inbounds for ii=1:1:(size(ldl.colptr_B,1)-1)
         rowvals = ldl.rowval_B[ldl.colptr_B[ii]:(ldl.colptr_B[ii+1]-1)];
         nzvals = ldl.nzval_B[ldl.colptr_B[ii]:(ldl.colptr_B[ii+1]-1)];
         p = sortperm(rowvals);
@@ -1248,6 +1402,41 @@ function canonicalForm!(ldl::LDL{Tind, Tval}) where {Tind,Tval}
         ldl.rowval_B[ldl.colptr_B[ii]:(ldl.colptr_B[ii+1]-1)] = rowvals[p];
         ldl.nzval_B[ldl.colptr_B[ii]:(ldl.colptr_B[ii+1]-1)] = nzvals[p];
     end
+end
+
+#add additional ports into LDL
+function addPort!(ldl::LDL{Tind, Tval}, ii::Tind) where {Tind,Tval}
+    push!(ldl.col, ii);
+    ldl.perm_idx += 1; 
+end
+
+#change the ldl dimension due to early stop
+function reform!(ldl::LDL{Tind, Tval}) where {Tind,Tval}
+    numAddPorts = size(ldl.col, 1) - size(ldl.diagA, 1);
+    println("numAddPorts is $(numAddPorts)");
+    n = ldl.n - numAddPorts;
+    m = ldl.m + numAddPorts;
+    #transform the ldl into the canonical form so that we can have valid sparse matrix csc
+    canonicalForm!(ldl);
+    println("Finish the canonical form")
+    LA = SparseArrays.SparseMatrixCSC{Tval, Tind}(ldl.n, n, ldl.colptr_A, ldl.rowval_A, ldl.nzval_A);
+    LB = SparseArrays.SparseMatrixCSC{Tval, Tind}(ldl.m, n, ldl.colptr_B, ldl.rowval_B, ldl.nzval_B);
+    L = [LA;LB];
+    #re-distribute LA and LB according to new dim
+    LA = L[1:n, :];
+    LB = L[n+1:end, :];
+    #update data members
+    ldl.n = n;
+    ldl.m = m;
+    ldl.current_row_ptr_A = size(LA.rowval,1) + 1;
+    ldl.colptr_A = LA.colptr;
+    ldl.rowval_A = LA.rowval;
+    ldl.nzval_A = LA.nzval;
+
+    ldl.current_row_ptr_B = size(LB.rowval,1) + 1;
+    ldl.colptr_B = LB.colptr;
+    ldl.rowval_B = LB.rowval;
+    ldl.nzval_B = LB.nzval;
 end
 
 #=============================================================
@@ -2270,9 +2459,9 @@ function condNumber(adjGraphs::Array{SparseMatrixCSC{Tval, Tind}, 1}, #adj graph
     gOp = SqLinOp(false,1.0,numNode,g)
     upper = eigs(gOp;nev=1,which=:LM,tol=1e-2)[1][1]
     
-    g2(b) = upper*b - g(b)
+    g2(b) = abs(upper)*b - g(b)
     g2Op = SqLinOp(false,1.0,numNode,g2)
-    lower = upper - eigs(g2Op;nev=2,which=:LM,tol=1e-2)[1][2]
+    lower = abs(upper) - eigs(g2Op;nev=2,which=:LM,tol=1e-2)[1][2]
     
     if verbose
         println("lower: ", lower, ", upper: ", upper);

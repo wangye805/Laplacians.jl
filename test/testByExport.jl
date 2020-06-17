@@ -454,6 +454,52 @@ b = lap(a)*x
 b[S] .= 0
 @test sum(abs.(b)) < 1e-6
 
+#test the early stop mode using Icm10Post
+II = [1, 1, 2, 2, 2, 3, 3, 4, 4, 4, 5, 5];
+JJ = [2, 5, 1, 3, 4, 2, 4, 2, 3, 5, 1, 4];
+VV = [1.0, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 2];
+
+a = SparseArrays.sparse(II, JJ, VV);
+llmat = Laplacians.LLmatp(a);
+#numAddPorts is 1
+ldl, schurC, P = Laplacians.approxChol(llmat, 2, 1);
+ldlGolden = Laplacians.LDL{Int64, Float64}(2, 3, 4, [1, 2], 1, [1, 1, 1], Int64[], Float64[], 5, [1, 3, 5], [1, 2, 1, 3], [1.0, 1, 1, 1], [2.0, 2]);
+@test Laplacians.isapprox(ldl, ldlGolden);
+schurCGolden = SparseArrays.sparse([1, 2, 1, 3, 2, 3], [2, 1, 3, 1, 3, 2], [1.5, 1.5, 0.5, 0.5, 2, 2]);
+@test isapprox(schurC, schurCGolden);
+@test isapprox(P, [3, 1, 2, 4, 5]);
+#test the condition number, should be 1
+aP = a[P,P];
+cn = Laplacians.condNumber(aP, ldl, schurC,verbose=true);
+@test isapprox(abs(cn), 1);
+
+#test the corner case of early stop
+#numAddPorts = 0
+llmat = Laplacians.LLmatp(a);
+ldl, schurC, P = Laplacians.approxChol(llmat, 2, 0);
+ldlGolden = Laplacians.LDL{Int64, Float64}(3, 2, 4, [1, 2, 3], 3, [1, 2, 3, 3], [3, 3], [1.0, 1.0], 5, [1, 2, 3, 5], [1, 2, 1, 2], [1.0, 1.0, 1.5, 0.5], [2.0, 2.0, 2.0]);
+schurCGolden = SparseArrays.sparse([1, 2], [2, 1], [2.375, 2.375]);
+@test Laplacians.isapprox(ldl, ldlGolden);
+@test isapprox(schurC, schurCGolden);
+@test isapprox(P, [3, 1, 2, 4, 5]);
+aP = a[P,P];
+cn = Laplacians.condNumber(aP, ldl, schurC,verbose=true);
+@test isapprox(abs(cn), 1);
+
+
+#no ports get reduced
+llmat = Laplacians.LLmatp(a);
+ldl, schurC, P = Laplacians.approxChol(llmat, 2, 3);
+ldlGolden = Laplacians.LDL{Int64, Float64}(0, 5, 4, Int64[], 1, [1], Int64[], Float64[], 1, [1], Int64[], Float64[], Float64[]);
+schurCGolden = SparseArrays.sparse([3, 4, 3, 5, 1, 2, 4, 1, 3, 5, 2, 4], [1, 1, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5], [1.0, 1, 1, 1, 1, 1,1,1,1,2,1,2]);
+@test Laplacians.isapprox(ldl, ldlGolden);
+@test isapprox(schurC, schurCGolden);
+@test isapprox(P, [3, 1, 2, 4, 5]);
+aP = a[P,P];
+cn = Laplacians.condNumber(aP, ldl, schurC,verbose=true);
+@test isapprox(abs(cn), 1);
+
+
 #now test partitioned functions 
 #testcase 1, simple H tree partitioned into two parts
 #part 1:
