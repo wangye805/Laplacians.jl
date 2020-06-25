@@ -518,6 +518,15 @@ ldlFixed, schurCFixed, debugInfo = Laplacians.approxChol(llmat, 2; debug = true,
 @test Laplacians.isapprox(ldl, ldlFixed);
 @test isapprox(schurC, schurCFixed);
 
+#test the symmetric support methods (more robust but not as accurate as condNumber)
+lower = Laplacians.support(a, ldl, schurC);
+upper = Laplacians.support(ldl, schurC, a);
+@test lower>=1
+@test upper>=1
+cn = abs(Laplacians.condNumber(a, ldl, schurC,verbose=true));
+@test abs(upper*lower-cn)/cn<0.05
+
+
 #now test partitioned functions 
 #testcase 1, simple H tree partitioned into two parts
 #part 1:

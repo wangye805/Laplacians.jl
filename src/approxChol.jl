@@ -2040,6 +2040,43 @@ function support_asym(a, ldl::LDL{Tind, Tval}, schurC::SparseMatrixCSC{Tval, Tin
 end
 
 """
+Calculate the support from ldl, schurC to adjGraph
+In other words, cacluate lambda(ldl^-1*la)
+"""
+function support(ldl::LDL{Tind, Tval}, schurC::SparseMatrixCSC{Tval, Tind}, a::SparseMatrixCSC{Tval, Tind}; verbose=false)where {Tind, Tval}
+    @assert((ldl.n+ldl.m)==size(a,1))
+    canonicalForm!(ldl);
+    la = lap(a)
+    F = LinearAlgebra.cholesky(Laplacians.lap(schurC)[1:end-1, 1:end-1]);
+    #construct the square operator 
+    g = function(b)
+        y = copy(b);
+        if ldl.m >1
+            x2 = [F.UP\y[ldl.n+1:ldl.n+ldl.m-1]; 0];
+        else
+            x2 = [0];
+        end
+        y[(ldl.n+1):(ldl.n+ldl.m)] = x2;
+
+        backwardSolve!(ldl, y);
+        y = la*y;
+        forwardSolve!(ldl, y);
+
+        if ldl.m >1
+            x2 = [F.PtL\y[ldl.n+1:ldl.n+ldl.m-1]; 0];
+        else
+            x2 = [0];
+        end
+        y[(ldl.n+1):(ldl.n+ldl.m)] = x2;
+
+        return y
+    end
+    gOp = SqLinOp(true,1.0,size(a,1),g)
+    upper = eigs(gOp;nev=1,which=:LM,tol=1e-2)[1][1]
+    return upper; 
+end
+
+"""
 Calculate the support function using the symmetric operand
 """
 function support(a, ldl::LDL{Tind, Tval}, schurC::SparseMatrixCSC{Tval, Tind}; verbose=false)where {Tind, Tval}
