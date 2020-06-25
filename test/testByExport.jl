@@ -499,6 +499,24 @@ aP = a[P,P];
 cn = Laplacians.condNumber(aP, ldl, schurC,verbose=true);
 @test isapprox(abs(cn), 1);
 
+#test the debug and fixed random flag
+a = Laplacians.grid2(3);
+llmat = Laplacians.LLmatp(a); 
+#reference run (debug = true, fixed random = false)
+ldl, schurC, debugInfo = Laplacians.approxChol(llmat, 2; debug = true)
+@test abs(Laplacians.condNumber(a, ldl, schurC,verbose=true)) <=2
+order = ldl.col;
+reduceDegs, PRNGs = debugInfo;
+#when debug = false, fixed random = true
+llmat = Laplacians.LLmatp(a);
+ldlFixed, schurCFixed, debugInfo = Laplacians.approxChol(llmat, 2; fixedRandom = true, order = order, PRNGs = PRNGs);
+@test Laplacians.isapprox(ldl, ldlFixed);
+@test isapprox(schurC, schurCFixed);
+#when debug = true, fixed random = true
+llmat = Laplacians.LLmatp(a);
+ldlFixed, schurCFixed, debugInfo = Laplacians.approxChol(llmat, 2; debug = true, fixedRandom = true, order = order, PRNGs = PRNGs);
+@test Laplacians.isapprox(ldl, ldlFixed);
+@test isapprox(schurC, schurCFixed);
 
 #now test partitioned functions 
 #testcase 1, simple H tree partitioned into two parts

@@ -609,123 +609,110 @@ function approxChol(a::LLmatp{Tind,Tval}) where {Tind,Tval}
     return ldli
 end
 
-#the approximate cholesky with given reduce order, PRNGs
-#used for debugging only
-function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind, order::Array{Tind, 1}, PRNGs::Array{Array{Tval,1}, 1}; debug = false) where {Tind,Tval}
-    exactFactorization=true
-    nGraph = a.n
-    n = a.n - nPorts
-    
-    #replace with our LDL class
-    ldl = LDL(a, nPorts)
+#the function to factorize one node 
+#debug:         print the reduce degs and PRNGs used for each node 
+#fixedRandom:   use the given PRNGs for each node
+#When: 
+#1. debug == false, fixedRandom == false, order, PRNGs, reduceDegs not used and empty 
+#2. debug == true, fixedRandom == false, order not used and empty, PRNGs, reduceDegs will bereturned as an output tuple
+#3. debug == false, fixedRandom == true, order, PRNGs provided as input, reduceDegs empty and not used
+#4. debug == true, fixedRandom == true, order, PRNGs provided as input, reduceDegs returned as output variable
+function factorizeOneNode(a::LLmatp{Tind,Tval},
+                          i::Tind, 
+                          colspace::Array{LLp{Tind,Tval}}, 
+                          cumspace::Array{Tval},
+                          vals::Array{Tval},
+                          len::Tind,
+                          csum::Tval,
+                          ldl::LDL{Tind, Tval},
+                          pq::ApproxCholPQ{Tind},
+                          debug::Bool, 
+                          fixedRandom::Bool, 
+                          reduceDegs::Array{Tind, 1}, 
+                          PRNGs::Array{Array{Tval,1}, 1}) where {Tind,Tval}
+    addColumn!(ldl, i);
 
-    it = 1
-
-    colspace = Array{LLp{Tind,Tval}}(undef, nGraph)
-    cumspace = Array{Tval}(undef, nGraph)
-    vals = Array{Tval}(undef, nGraph) # will be able to delete this
+    #add the diagonal element
+    addDiag!(ldl, csum)
 
     o = Base.Order.ord(isless, identity, false, Base.Order.Forward)
-
-    #record the reduced degs at each step
-    reduceDegs = Array{Int64}(undef, n);
-
-    @inbounds while it <= n
-        #use given order
-        i = order[it];
-
-        addColumn!(ldl, i);
-
-        it = it + 1
-
-        len = get_ll_col(a, i, colspace)
-
-        len = compressCol!(a, colspace, len; forSchurC=false)  #3hog
-
-        csum = zero(Tval)
-        for ii in 1:len
-            vals[ii] = colspace[ii].val
-            csum = csum + colspace[ii].val
-            cumspace[ii] = csum
+    colScale = one(Tval)
+    wdeg = csum;   
+    #record reduce degs for each iteration of reduction
+    if(debug)
+        reduceDegs[i] = len;
+        if(!fixedRandom)
+            PRNGs[i] = Tval[];
         end
-        wdeg = csum
+    end
+    #first len-1 edges are special
+    for joffset in 1:(len-1)
 
-        #add the diagonal element
-        addDiag!(ldl, csum)
-
-        colScale = one(Tval)
-        
-        if len>=3
-            exactFactorization = false;
-        end
-        #record reduce degs for each iteration of reduction
-        if debug
-            reduceDegs[i] = len;
-        end
-        for joffset in 1:(len-1)
-
-            ll = colspace[joffset]
-            w = vals[joffset] * colScale
-            j = ll.row
-            revj = ll.reverse
-
-            #println("deal with node $(j) in col $(i)");
-
-            f = w/(wdeg)
-
-            addOffDiag!(ldl, j, vals[joffset])
-
-            vals[joffset] = zero(Tval)
-            randVal = PRNGs[i][joffset];
-            # kind = Laplacians.blockSample(vals,k=1)[1]
-            r = randVal * (csum - cumspace[joffset]) + cumspace[joffset]
-            koff = searchsortedfirst(cumspace,r,one(len),len,o)
-
-            k = colspace[koff].row
-
-            newEdgeVal = f*(one(Tval)-f)*wdeg
-            #println("newEdgeVal is $(newEdgeVal)");
-
-            # fix row k in col j
-            revj.row = k   # dense time hog: presumably becaus of cache
-            revj.val = newEdgeVal
-            revj.reverse = ll
-
-            # fix row j in col k
-            khead = a.cols[k]
-            a.cols[k] = ll
-            ll.next = khead
-            ll.reverse = revj
-            ll.val = newEdgeVal
-            ll.row = j
-
-
-            colScale = colScale*(one(Tval)-f)
-            wdeg = wdeg*(one(Tval)-f)^2
-            
-        end # for
-
-        ll = colspace[len]
-        w = vals[len] * colScale
+        ll = colspace[joffset]
+        w = vals[joffset] * colScale
         j = ll.row
         revj = ll.reverse
 
-        #println("deal with last node $(j) in col $(i)");
+        #println("deal with node $(j) in col $(i)");
 
-        addOffDiag!(ldl,j, vals[len]);
+        f = w/(wdeg)
 
-        revj.val = zero(Tval)
-        #lets print the graph in llmat 
-        #print_ll_mat(a);
+        addOffDiag!(ldl, j, vals[joffset])
+
+        vals[joffset] = zero(Tval)
+        if(fixedRandom)
+            randVal = PRNGs[i][joffset];
+        else
+            randVal = rand();
+            if debug
+                push!(PRNGs[i], randVal);
+            end
+        end
+        # kind = Laplacians.blockSample(vals,k=1)[1]
+        r = randVal * (csum - cumspace[joffset]) + cumspace[joffset]
+        koff = searchsortedfirst(cumspace,r,one(len),len,o)
+
+        k = colspace[koff].row
+        if(!fixedRandom)
+            approxCholPQInc!(pq, k)
+        end
+        newEdgeVal = f*(one(Tval)-f)*wdeg
+        #println("newEdgeVal is $(newEdgeVal)");
+
+        # fix row k in col j
+        revj.row = k   # dense time hog: presumably becaus of cache
+        revj.val = newEdgeVal
+        revj.reverse = ll
+
+        # fix row j in col k
+        khead = a.cols[k]
+        a.cols[k] = ll
+        ll.next = khead
+        ll.reverse = revj
+        ll.val = newEdgeVal
+        ll.row = j
+
+
+        colScale = colScale*(one(Tval)-f)
+        wdeg = wdeg*(one(Tval)-f)^2
+        
+    end # for
+
+    ll = colspace[len]
+    w = vals[len] * colScale
+    j = ll.row
+    revj = ll.reverse
+
+    #println("deal with last node $(j) in col $(i)");
+    revj.val = zero(Tval)
+
+    addOffDiag!(ldl,j, vals[len]);
+
+    if(!fixedRandom)
+        approxCholPQDec!(pq, j)
     end
-    debugInfo = [];
-    if debug
-        debugInfo = [reduceDegs];
-    end
-    finishColumn!(ldl)  
-    #println("is exact factorization? $(exactFactorization)")
-    #also the remaining schur complement graph (as adjacency matrix)
-    return ldl, schurComplement!(a, n), debugInfo
+
+
 end
 
 #the approximate cholesy with early stop
@@ -843,9 +830,14 @@ end
 
 
 #the approximate cholesky with parameter of number of ports (>=1)
-#add the debug knob to print debugging info
-function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind; debug = false) where {Tind,Tval}
-    exactFactorization=true
+#debug:         print the reduce degs and PRNGs used for each node 
+#fixedRandom:   use the given PRNGs for each node
+#When: 
+#1. debug == false, fixedRandom == false, order, PRNGs, reduceDegs not used and empty 
+#2. debug == true, fixedRandom == false, order not used and empty, PRNGs, reduceDegs will bereturned as an output tuple
+#3. debug == false, fixedRandom == true, order, PRNGs provided as input, reduceDegs empty and not used
+#4. debug == true, fixedRandom == true, order, PRNGs provided as input, reduceDegs returned as output variable
+function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind; debug = false, fixedRandom = false, order::Array{Tind, 1} = Tind[], PRNGs::Array{Array{Tval,1}, 1} = Array{Tval, 1}[]) where {Tind,Tval}
     nGraph = a.n
     n = a.n - nPorts
     
@@ -853,6 +845,7 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind; debug = false) where {Ti
     ldl = LDL(a, nPorts)
 
     #now only feed in first n degs
+    #not acutally used when fixed random is true
     pq = ApproxCholPQ(a.degs, n)
 
     it = 1
@@ -861,26 +854,37 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind; debug = false) where {Ti
     cumspace = Array{Tval}(undef, nGraph)
     vals = Array{Tval}(undef, nGraph) # will be able to delete this
 
-    o = Base.Order.ord(isless, identity, false, Base.Order.Forward)
-
-    #record the reduced degs at each step
-    reduceDegs = Array{Int64}(undef, n);
-    PRNGs = Array{Array{Tval,1}, 1}(undef, n);
+    if(debug)
+        #record the reduced degs at each step
+        reduceDegs = Array{Int64}(undef, n);
+        if(!fixedRandom)
+            PRNGs = Array{Array{Tval,1}, 1}(undef, n);
+        end
+    else
+        reduceDegs = Tind[];
+        if(!fixedRandom)
+            PRNGs = Array{Tval, 1}[];
+        end
+    end
 
     @inbounds while it <= n
-
-        i = approxCholPQPop!(pq)
+        if(fixedRandom)
+            #use given order
+            i = order[it];
+        else
+            i = approxCholPQPop!(pq)
+        end
         #println("pop out node $(i)");
 
-        #PrintApproxCholPQ(pq);
+        it = it + 1;
 
-        addColumn!(ldl, i);
-
-        it = it + 1
-
-        len = get_ll_col(a, i, colspace)
-
-        len = compressCol!(a, colspace, len, pq)  #3hog
+        #pre-processing edge weights for node i
+        len = get_ll_col(a, i, colspace);
+        if(!fixedRandom)
+            len = compressCol!(a, colspace, len, pq)  #3hog
+        else
+            len = compressCol!(a, colspace, len; forSchurC=false)  #3hog
+        end
 
         csum = zero(Tval)
         for ii in 1:len
@@ -888,93 +892,23 @@ function approxChol(a::LLmatp{Tind,Tval}, nPorts::Tind; debug = false) where {Ti
             csum = csum + colspace[ii].val
             cumspace[ii] = csum
         end
-        wdeg = csum
 
-        #add the diagonal element
-        addDiag!(ldl, csum)
+        #factorize node i
+        factorizeOneNode(a, i, colspace, cumspace, vals, len, csum, ldl, pq,
+                         debug, 
+                         fixedRandom, 
+                         reduceDegs, 
+                         PRNGs);
 
-        colScale = one(Tval)
-        
-        if len>=3
-            exactFactorization = false;
-        end
-        #record reduce degs for each iteration of reduction
-        if debug
-            reduceDegs[i] = len;
-            PRNGs[i] = Tval[];
-        end
-        for joffset in 1:(len-1)
-
-            ll = colspace[joffset]
-            w = vals[joffset] * colScale
-            j = ll.row
-            revj = ll.reverse
-
-            #println("deal with node $(j) in col $(i)");
-
-            f = w/(wdeg)
-
-            addOffDiag!(ldl, j, vals[joffset])
-
-            vals[joffset] = zero(Tval)
-            randVal = rand();
-            #record PRNGs used in each node
-            if debug
-                push!(PRNGs[i], randVal);
-            end
-            # kind = Laplacians.blockSample(vals,k=1)[1]
-            r = randVal * (csum - cumspace[joffset]) + cumspace[joffset]
-            koff = searchsortedfirst(cumspace,r,one(len),len,o)
-
-            k = colspace[koff].row
-            #println("k is $(k)");
-            approxCholPQInc!(pq, k)
-
-            newEdgeVal = f*(one(Tval)-f)*wdeg
-            #println("newEdgeVal is $(newEdgeVal)");
-
-            # fix row k in col j
-            revj.row = k   # dense time hog: presumably becaus of cache
-            revj.val = newEdgeVal
-            revj.reverse = ll
-
-            # fix row j in col k
-            khead = a.cols[k]
-            a.cols[k] = ll
-            ll.next = khead
-            ll.reverse = revj
-            ll.val = newEdgeVal
-            ll.row = j
-
-
-            colScale = colScale*(one(Tval)-f)
-            wdeg = wdeg*(one(Tval)-f)^2
-            
-        end # for
-
-        ll = colspace[len]
-        w = vals[len] * colScale
-        j = ll.row
-        revj = ll.reverse
-
-        #println("deal with last node $(j) in col $(i)");
-
-        addOffDiag!(ldl,j, vals[len]);
-
-        if it < nGraph
-            approxCholPQDec!(pq, j)
-        end
-
-        revj.val = zero(Tval)
-        #lets print the graph in llmat 
-        #print_ll_mat(a);
     end
+    finishColumn!(ldl)  
+    #change the ldl to be the canonical form
+    canonicalForm!(ldl)
+    #post processing for debugging info
     debugInfo = [];
     if debug
         debugInfo = [reduceDegs, PRNGs];
     end
-    finishColumn!(ldl)  
-    #println("is exact factorization? $(exactFactorization)")
     #also the remaining schur complement graph (as adjacency matrix)
     return ldl, schurComplement!(a, n), debugInfo
 end
