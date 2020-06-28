@@ -526,6 +526,88 @@ upper = Laplacians.support(ldl, schurC, a);
 cn = abs(Laplacians.condNumber(a, ldl, schurC,verbose=true));
 @test abs(upper*lower-cn)/cn<0.05
 
+#test restrict approx chol results in a subset, lets use icm10post
+I0 = [1, 2, 1, 5, 2, 3, 2, 4, 3, 4, 4, 5];
+J0 = [2, 1, 5, 1, 3, 2, 4, 2, 4, 3, 5, 4];
+V0 = [1.0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2];
+#now interleave two identical copies of icm10post
+II = vcat(I0.*2, (I0.*2).-1);
+JJ = vcat(J0.*2, (J0.*2).-1);
+VV = vcat(V0, V0);
+adjGraph = SparseArrays.sparse(II, JJ, VV);
+#now test the approx chol with disconnected forests
+llmat = Laplacians.LLmatp(adjGraph);
+ldl, schurC = Laplacians.approxChol(llmat, 2);
+subset = [1, 3, 5, 7, 9];
+ldlSub, schurCSub = Laplacians.subsetApproxChol(ldl, schurC, subset);
+#should have the same results with single copy
+subAdjGraph = adjGraph[subset, subset];
+llmat = Laplacians.LLmatp(subAdjGraph);
+ldlGolden, schurCGolden = Laplacians.approxChol(llmat, 1)
+@test Laplacians.isapprox(ldlSub, ldlGolden);
+@test isapprox(schurCSub, schurCGolden);
+#also test the condition number, should be 1
+cn = abs(Laplacians.condNumber(subAdjGraph, ldlSub, schurCSub,verbose=true));
+@test abs(cn -1)<0.01
+
+#test approx chol in a subset but with more ports
+llmat = Laplacians.LLmatp(adjGraph);
+ldl, schurC = Laplacians.approxChol(llmat, 8);
+subset = [1, 3, 5, 7, 9];
+ldlSub, schurCSub = Laplacians.subsetApproxChol(ldl, schurC, subset);
+#should have the same results with single copy
+subAdjGraph = adjGraph[subset, subset];
+llmat = Laplacians.LLmatp(subAdjGraph);
+ldlGolden, schurCGolden = Laplacians.approxChol(llmat, 4)
+@test Laplacians.isapprox(ldlSub, ldlGolden);
+@test isapprox(schurCSub, schurCGolden);
+#also test the condition number, should be 1
+cn = abs(Laplacians.condNumber(subAdjGraph, ldlSub, schurCSub,verbose=true));
+@test abs(cn -1)<0.01
+
+#test a graph with 0 deg in ports
+#modify icm10post, create node 6
+II = [1, 2, 1, 5, 2, 3, 2, 4, 3, 4, 4, 5];
+JJ = [2, 1, 5, 1, 3, 2, 4, 2, 4, 3, 5, 4];
+VV = [1.0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2];
+adjGraph = SparseArrays.sparse(II, JJ, VV, 6, 6);
+#run approximate cholesky
+llmat = Laplacians.LLmatp(adjGraph);
+ldl, schurC = Laplacians.approxChol(llmat, 3);
+#get the results in given subset
+subset = [1, 2, 3, 4, 5];
+ldlSub, schurCSub = Laplacians.subsetApproxChol(ldl, schurC, subset);
+#should have the same results with single copy
+subAdjGraph = adjGraph[subset, subset];
+llmat = Laplacians.LLmatp(subAdjGraph);
+ldlGolden, schurCGolden = Laplacians.approxChol(llmat, 2)
+@test Laplacians.isapprox(ldlSub, ldlGolden);
+@test isapprox(schurCSub, schurCGolden);
+#also test the condition number, should be 1
+cn = abs(Laplacians.condNumber(subAdjGraph, ldlSub, schurCSub,verbose=true));
+@test abs(cn -1)<0.01
+
+#test a graph with 0 deg inside ports
+II = [1, 2, 1, 6, 2, 3, 2, 4, 3, 4, 4, 6];
+JJ = [2, 1, 6, 1, 3, 2, 4, 2, 4, 3, 6, 4];
+VV = [1.0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2];
+adjGraph = SparseArrays.sparse(II, JJ, VV, 6, 6);
+#run approximate cholesky
+llmat = Laplacians.LLmatp(adjGraph);
+ldl, schurC = Laplacians.approxChol(llmat, 3);
+#get the results in given subset
+subset = [1, 2, 3, 4, 6];
+ldlSub, schurCSub = Laplacians.subsetApproxChol(ldl, schurC, subset);
+#should have the same results with single copy
+subAdjGraph = adjGraph[subset, subset];
+llmat = Laplacians.LLmatp(subAdjGraph);
+ldlGolden, schurCGolden = Laplacians.approxChol(llmat, 2)
+@test Laplacians.isapprox(ldlSub, ldlGolden);
+@test isapprox(schurCSub, schurCGolden);
+#also test the condition number, should be 1
+cn = abs(Laplacians.condNumber(subAdjGraph, ldlSub, schurCSub,verbose=true));
+@test abs(cn -1)<0.01
+
 
 #now test partitioned functions 
 #testcase 1, simple H tree partitioned into two parts
