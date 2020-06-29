@@ -2208,8 +2208,9 @@ function subsetApproxChol(ldl::LDL{Tind, Tval}, schurC::SparseMatrixCSC{Tval, Ti
     end
     #find the permutation indices in the subset
     PSub = Tind[];
+    PInSet = ldl.col[idxSet[1:numInternalNode]];
     for ii in 1:1:numInternalNode
-        push!(PSub, subsetMap[ldl.col[idxSet[1:numInternalNode]][ii]]);
+        push!(PSub, subsetMap[PInSet[ii]]);
     end
 
     #taking only the subset
