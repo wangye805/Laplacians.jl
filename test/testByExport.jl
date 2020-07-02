@@ -639,6 +639,8 @@ V2 = [1.0, 1.0, 1.0, 1.0];
 adjGraph2 = SparseArrays.sparse(I2, J2, V2, 3, 3);
 
 las = [Laplacians.lap(adjGraph1), Laplacians.lap(adjGraph2)];
+portVec1 = [1];
+portVec2 = [1];
 portVecs = [[1], [1]];
 indexOffsets = [0, 3];
 numInternalNode = 5;
@@ -691,6 +693,23 @@ adjGraphs = [adjGraph1, adjGraph2];
 #let's also test whether aggregated adjGraph is correct
 adjGraphT = Laplacians.fullAdjGraph(adjGraphs, portVecs, numPort);
 @test isapprox(LinearAlgebra.norm(adjGraph - adjGraphT), 0);
+
+#test how early stop works together with distributed approx chol
+llmat1 = Laplacians.LLmatp(adjGraph1);
+#add one port for part 1
+ldlP1, schurCP1, P1 = Laplacians.approxChol(llmat1, 1, 1);
+pAdjGraph1 = adjGraph1[P1, P1];
+llmat2 = Laplacians.LLmatp(adjGraph2);
+#add one port for part 2
+ldlP2, schurCP2, P2 = Laplacians.approxChol(llmat2, 1, 1);
+pAdjGraph2 = adjGraph2[P2, P2];
+pAdjGraphs = [pAdjGraph1, pAdjGraph2];
+ldlPs = [ldlP1, ldlP2];
+schurCPs = [schurCP1, schurCP2];
+pPortVecs = [[1, 3], [2, 3]]
+pNumPort = 3;
+cn = abs(Laplacians.condNumber(pAdjGraphs, ldlPs, schurCPs, pPortVecs, pNumPort, verbose = true));
+@test isapprox(cn, 1);
 
 #Second testcase grid2_3
 #part 1
@@ -793,6 +812,36 @@ schurCs = [schurC1, schurC2, schurC3, schurC4];
 schurC = Laplacians.schurComplement(schurCs, portVecs, numPort);
 
 @test isapprox(abs(Laplacians.condNumber(adjGraphs, ldls, schurCs, portVecs, numPort, verbose=true)),1);
+
+#Let's test grid_2(3) in distributed processing with early stop
+#add one port for part 1
+llmat1 = Laplacians.LLmatp(adjGraph1);
+ldlP1, schurCP1, P1 = Laplacians.approxChol(llmat1, 3, 1);
+pAdjGraph1 = adjGraph1[P1, P1];
+pPortVec1 = vcat(1, portVec1.+4);
+#add one port for part 2
+llmat2 = Laplacians.LLmatp(adjGraph2);
+ldlP2, schurCP2, P2 = Laplacians.approxChol(llmat2, 3, 1);
+pAdjGraph2 = adjGraph2[P2, P2];
+pPortVec2 = vcat(2, portVec2.+4);
+#add one port for part 3
+llmat3 = Laplacians.LLmatp(adjGraph3);
+ldlP3, schurCP3, P3 = Laplacians.approxChol(llmat3, 3, 1);
+pAdjGraph3 = adjGraph3[P3, P3];
+pPortVec3 = vcat(3, portVec3.+4);
+#add one port for part 4
+llmat4 = Laplacians.LLmatp(adjGraph4);
+ldlP4, schurCP4, P4 = Laplacians.approxChol(llmat4, 2, 1);
+pAdjGraph4 = adjGraph4[P4, P4];
+pPortVec4 = vcat(4, portVec4.+4);
+
+pAdjGraphs = [pAdjGraph1, pAdjGraph2, pAdjGraph3, pAdjGraph4];
+ldlPs = [ldlP1, ldlP2, ldlP3, ldlP4];
+schurCPs = [schurCP1, schurCP2, schurCP3, schurCP4];
+pPortVecs = [pPortVec1, pPortVec2, pPortVec3, pPortVec4];
+pNumPort = 9;
+cn = abs(Laplacians.condNumber(pAdjGraphs, ldlPs, schurCPs, pPortVecs, pNumPort, verbose = true));
+@test isapprox(cn, 1);
 
 
 #let's test permuted icm10 post
