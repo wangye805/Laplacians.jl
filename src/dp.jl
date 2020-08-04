@@ -5,6 +5,56 @@ distributed approxChol Laplacian solver by Ye Wang 2020.
 this solver is based on Prof Spielman's single-threaded approximate cholesky
 
 =#
+import Metis;
+#apply metis graph separator to do nest dissection
+#input:
+#   adj: graph adjacency matrix
+#   numHier: number of hierarchy's dissected. The whole graph will be cutted into 2^numHier parts
+#output:
+#   P: permutation vector
+#   numPorts: last section in the permutation vector are boundary points
+function nestDissection(adj::SparseArrays.SparseMatrixCSC{Tval,Tind}, numHier::Tind) where {Tval, Tind}
+    #a: hierarchical adj matrix of sub matrices
+    a = Array{Array{SparseArrays.SparseMatrixCSC{Tval, Tind}, 1}, 1}(undef, numHier);
+    #s: set of nodes indices in global id
+    s = Array{Array{Array{Tind}, 1}, 1}(undef, numHier);
+    #b: set of boundary nodes
+    b = Tind[];
+
+    a[1] = [adj];
+    s[1] = [collect(1:adj.n)];
+    for ii=1:1:(numHier - 1)
+        #at ii-th hier, we have 2^(ii-1) sub-matrix to dissection
+        #prepare a[ii+1]
+        a[ii+1] = Array{SparseArrays.SparseMatrixCSC{Tval, Tind}, 1}(undef, 2^ii);
+        s[ii+1] = Array{Array{Tind}, 1}(undef, 2^ii);
+        for jj=1:1:2^(ii-1)
+            part = Metis.separator(a[ii][jj]);
+            #find local indices of part1, part2 and boundry parts
+            sLocal1 = findall(part.==1);
+            sLocal2 = findall(part.==2);
+            sLocal3 = findall(part.==3);
+            a[ii+1][2*jj-1] = Laplacians.submatrix(a[ii][jj], sLocal1);
+            s[ii+1][2*jj-1] = (s[ii][jj])[sLocal1];
+            a[ii+1][2*jj] = Laplacians.submatrix(a[ii][jj], sLocal2);
+            s[ii+1][2*jj] = (s[ii][jj])[sLocal2];
+            b = [(s[ii][jj])[sLocal3]; b];
+        end
+    end
+    #collect permutation matrix at the last hierachy
+    P = Tind[];
+    for ii = 1:1:2^(numHier-1)
+        P = [P; s[numHier][ii]];
+    end
+    #check nodes are indeed part into 2^numHier parts
+    adjP = Laplacians.submatrix(adj, P)
+    @assert(maximum(Laplacians.components(adjP))>=2^(numHier-1));
+    #now include ports
+    P = [P; b];
+    #check whether P is a perm
+    @assert(isperm(P));
+    return P, length(b);
+end
 
 #forwardSolve with multi partitions, used in partitioned version of solve!
 function forwardSolve!(ldls::Array{LDL{Tind, Tval}, 1}, #result ldl obtained from approximate factorization

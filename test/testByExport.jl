@@ -247,6 +247,23 @@ Ar = Ar + Ar';
 @test LinearAlgebra.norm(Laplacians.lap(Ar)-Lio, 2)<=1e-10
 rm("tmp.txt")
 
+#test permutation of submatrix
+P = [4, 2, 1, 3, 5];
+PA = Laplacians.submatrix(Ar, P);
+IPA = [3, 2, 3, 5, 2, 1, 2, 4, 1, 4, 5, 1];
+JPA = [2, 3, 5, 3, 1, 2, 4, 2, 4, 1, 1, 5];
+VPA = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2.0];
+@test PA==SparseArrays.sparse(IPA, JPA, VPA, 5, 5);
+
+#test submatrix and permutation of submatrix
+P = [4, 2, 1];
+PA = Laplacians.submatrix(Ar, P);
+IPA = [3, 2, 1, 2];
+JPA = [2, 3, 2, 1];
+VPA = [1, 1, 1, 1.0];
+@test PA==SparseArrays.sparse(IPA, JPA, VPA, 3, 3);
+
+
 # export unweight, unweight!
 
 a2 = unweight(a2)

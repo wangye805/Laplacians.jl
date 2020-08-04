@@ -36,7 +36,36 @@ Unused:
 
 =#
 
+#extract the submatrix with potential permutation
+#P: subset and permutation vector, in which all index can only show up once and is from 1 to mat.n
+function submatrix(mat::SparseArrays.SparseMatrixCSC{Tv,Ti}, P::Array{Ti}) where {Tv, Ti}
+    #check maximum and mininum of P, should be from 1 to mat.n
+    @assert(minimum(P)>=1);
+    @assert(maximum(P)<=mat.n);
 
+    #now create map vector P[ii]->ii from the original matrix to the new matrix
+    #also check whether duplicate happens
+    permMap = zeros(Int64, mat.n);
+    @inbounds for ii=1:1:length(P)
+        @assert(permMap[P[ii]]==0);
+        permMap[P[ii]] = ii;
+    end
+    #find the IJV format of the matrix
+    I, J, V = findnz(mat);
+    ISub = Ti[];
+    JSub = Ti[];
+    VSub = Tv[];
+    #transform to get new format
+    @inbounds for ii=1:1:length(I)
+        #only include edges 
+        if(permMap[I[ii]]>0 && permMap[J[ii]]>0)
+            push!(ISub, permMap[I[ii]]);
+            push!(JSub, permMap[J[ii]]);
+            push!(VSub, V[ii]);
+        end
+    end
+    return SparseArrays.sparse(ISub, JSub, VSub, length(P), length(P));
+end
 
 """Computes the connected components of a graph.
 Returns them as a vector of length equal to the number of vertices.
